@@ -584,8 +584,8 @@ clonefs() {
 	else
 		mkdir -p ${to}_tmp
 		[ ${TMPFS_ALL} -eq 1 ] && mount -t tmpfs tmpfs ${to}_tmp
-		mount -t nullfs -o union -o ro ${from} ${to}
-		mount -t nullfs -o union ${to}_tmp ${to}
+		mount -t nullfs -o ro ${from} ${to}
+		mount -t unionfs -o noatime ${to}_tmp ${to}
 	fi
 }
 
