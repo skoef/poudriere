@@ -440,14 +440,7 @@ rollbackfs() {
 		return
 	fi
 
-	mtree -X ${mnt}/poudriere/mtree.${name}exclude \
-	-xr -f ${mnt}/poudriere/mtree.${name} -p ${mnt} | \
-	while read l ; do
-		case "$l" in
-		*extra*Directory*) rm -rf ${mnt}/${l%% *} 2>/dev/null ;;
-		*changed|*missing) echo ${MASTERMNT}/${l% *} ;;
-		esac
-	done | pax -rw -p p -s ",${MASTERMNT},,g" ${mnt}
+	rm -rf ${mnt}_tmp/* ${mnt}_tmp/.* || :
 }
 
 umountfs() {
@@ -589,8 +582,10 @@ clonefs() {
 			${fs}@${snap} \
 			${zfs_to}
 	else
-		[ ${TMPFS_ALL} -eq 1 ] && mount -t tmpfs tmpfs ${to}
-		pax -X -rw -p p -s ",${from},,g" ${from} ${to}
+		mkdir -p ${to}_tmp
+		[ ${TMPFS_ALL} -eq 1 ] && mount -t tmpfs tmpfs ${to}_tmp
+		mount -t nullfs -o union -o ro ${from} ${to}
+		mount -t nullfs -o union ${to}_tmp ${to}
 	fi
 }
 
@@ -603,14 +598,14 @@ destroyfs() {
 	mnt=$(realpath ${mnt})
 	fs=$(zfs_getfs ${mnt})
 	umountfs ${mnt} 1
-	if [ ${TMPFS_ALL} -eq 1 ]; then
-		umount -f ${mnt} 2>/dev/null || :
-	elif [ -n "${fs}" -a "${fs}" != "none" ]; then
+	if [ -n "${fs}" -a "${fs}" != "none" ]; then
 		zfs destroy -rf ${fs}
 		rmdir ${mnt}
 	else
-		chflags -R noschg ${mnt}
-		rm -rf ${mnt}
+		umount -f ${mnt} 2>/dev/null || :
+		umount -f ${mnt} 2>/dev/null || :
+		[ ${TMPFS_ALL} -eq 1 ] && umount -f ${mnt}_tmp 2>/dev/null || :
+		rm -rf ${mnt} ${mnt}_tmp
 	fi
 }
 
