@@ -39,6 +39,7 @@ Parameters:
     -u            -- update a portstree
     -l            -- lists all available portstrees
     -q            -- quiet (remove the header in list)
+    -v            -- Be verbose; show more information.
 
 Options:
     -F            -- when used with -c, only create the needed ZFS
@@ -65,8 +66,9 @@ UPDATE=0
 DELETE=0
 LIST=0
 QUIET=0
+VERBOSE=0
 BRANCH=head
-while getopts "B:cFudlp:qf:M:m:" FLAG; do
+while getopts "B:cFudlp:qf:M:m:v" FLAG; do
 	case "${FLAG}" in
 		B)
 			BRANCH="${OPTARG}"
@@ -101,6 +103,9 @@ while getopts "B:cFudlp:qf:M:m:" FLAG; do
 		m)
 			METHOD=${OPTARG}
 			;;
+		v)
+			VERBOSE=$((${VERBOSE:-0} + 1))
+			;;
 		*)
 			usage
 		;;
@@ -124,19 +129,31 @@ esac
 
 if [ ${LIST} -eq 1 ]; then
 	format='%-20s %-10s %s\n'
-	[ $QUIET -eq 0 ] && \
+	[ $QUIET -eq 0 ] &&
 		printf "${format}" "PORTSTREE" "METHOD" "PATH"
 	porttree_list | while read ptname ptmethod ptpath; do
 		printf "${format}" ${ptname} ${ptmethod} ${ptpath}
 	done
 else
-	test -z "${PTNAME}" && usage
+	[ -z "${PTNAME}" ] && usage
 fi
+
+cleanup_new_ports() {
+	msg "Error while creating ports tree, cleaning up." >&2
+	destroyfs ${PTMNT} ports
+	rm -rf ${POUDRIERED}/ports/${PTNAME} || :
+}
+
 if [ ${CREATE} -eq 1 ]; then
 	# test if it already exists
 	porttree_exists ${PTNAME} && err 2 "The ports tree ${PTNAME} already exists"
 	: ${PTMNT="${BASEFS:=/usr/local${ZROOTFS}}/ports/${PTNAME}"}
 	: ${PTFS="${ZPOOL}${ZROOTFS}/ports/${PTNAME}"}
+
+	# Wrap the ports creation in a special cleanup hook that will remove it
+	# if any error is encountered
+	CLEANUP_HOOK=cleanup_new_ports
+
 	createfs ${PTNAME} ${PTMNT} ${PTFS}
 	pset ${PTNAME} mnt ${PTMNT}
 	if [ $FAKE -eq 0 ]; then
@@ -144,12 +161,9 @@ if [ ${CREATE} -eq 1 ]; then
 		portsnap)
 			mkdir ${PTMNT}/.snap
 			msg "Extracting portstree \"${PTNAME}\"..."
-			/usr/sbin/portsnap -d ${PTMNT}/.snap -p ${PTMNT} fetch extract || \
-			/usr/sbin/portsnap -d ${PTMNT}/.snap -p ${PTMNT} fetch extract || \
-			{
-				destroyfs ports ${PTNAME}
-				err 1 " Fail"
-			}
+			/usr/sbin/portsnap -d ${PTMNT}/.snap -p ${PTMNT} fetch extract ||
+			/usr/sbin/portsnap -d ${PTMNT}/.snap -p ${PTMNT} fetch extract ||
+			    err 1 " fail"
 			;;
 		svn*)
 			case ${METHOD} in
@@ -161,24 +175,23 @@ if [ ${CREATE} -eq 1 ]; then
 			esac
 
 			msg_n "Checking out the ports tree..."
-			svn -q co ${proto}://${SVN_HOST}/ports/${BRANCH} \
-				${PTMNT} || {
-					destroyfs ports ${PTNAME}
-					err 1 " Fail"
-				}
+			[ ${VERBOSE} -gt 0 ] || quiet="-q"
+			svn ${quiet} co ${proto}://${SVN_HOST}/ports/${BRANCH} \
+				${PTMNT} || err 1 " fail"
 			echo " done"
 			;;
 		git)
 			msg "Cloning the ports tree"
-			git clone ${GIT_URL} ${PTMNT} || {
-				destroyfs ports ${PTNAME}
-				err 1 " Fail"
-			}
+			git clone ${GIT_URL} ${PTMNT} || err 1 " fail"
 			echo " done"
 			;;
 		esac
 		pset ${PTNAME} method ${METHOD}
+	else
+		pset ${PTNAME} method "-"
 	fi
+
+	unset CLEANUP_HOOK
 fi
 
 if [ ${DELETE} -eq 1 ]; then
@@ -188,7 +201,8 @@ if [ ${DELETE} -eq 1 ]; then
 	/sbin/mount -t nullfs | /usr/bin/grep -q "${PORTSMNT:-${PTMNT}} on" \
 		&& err 1 "Ports tree \"${PTNAME}\" is currently mounted and being used."
 	msg_n "Deleting portstree \"${PTNAME}\""
-	destroyfs ports ${PTNAME}
+	destroyfs ${PTMNT} ports
+	rm -rf ${POUDRIERED}/ports/${PTNAME} || :
 	echo " done"
 fi
 
@@ -206,11 +220,17 @@ if [ ${UPDATE} -eq 1 ]; then
 	fi
 	case ${METHOD} in
 	portsnap|"")
-		/usr/sbin/portsnap -d ${PTMNT}/.snap -p ${PORTSMNT:-${PTMNT}} ${PSCOMMAND} alfred
+		if [ -d "${PTMNT}/snap" ]; then
+			SNAPDIR=${PTMNT}/snap
+		else
+			SNAPDIR=${PTMNT}/.snap
+		fi
+		/usr/sbin/portsnap -d ${SNAPDIR} -p ${PORTSMNT:-${PTMNT}} ${PSCOMMAND} alfred
 		;;
 	svn*)
 		msg_n "Updating the ports tree..."
-		svn -q update ${PORTSMNT:-${PTMNT}}
+		[ ${VERBOSE} -gt 0 ] || quiet="-q"
+		svn ${quiet} update ${PORTSMNT:-${PTMNT}}
 		echo " done"
 		;;
 	git)

@@ -27,7 +27,7 @@
 .\"
 .\" Note: The date here should be updated whenever a non-trivial
 .\" change is made to the manual page.
-.Dd March 21, 2013
+.Dd April 17, 2013
 .Dt POUDRIERE 8
 .Os FreeBSD
 .Sh NAME
@@ -124,6 +124,9 @@ This can be used to resume a previous build and use the same log and URL paths.
 This flag specifies to clean the previous built binary packages.
 .It Fl C
 Clean previous packages for the given list to build.
+.It Fl F
+Only fetch from original MASTER_SITES.
+Skip FreeBSD mirrors.
 .It Fl j Ar name
 If given, run the bulk build only on the jail named
 .Ar name .
@@ -131,6 +134,8 @@ If given, run the bulk build only on the jail named
 This argument specifies how many
 .Ar number
 jobs will run in parallel for a bulk build.
+.It Fl N
+Do not build package repository or INDEX when build is completed.
 .It Fl p Ar tree
 This flag specifies on which ports
 .Ar tree
@@ -144,6 +149,8 @@ match the current options from the make.conf files and /var/db/options.
 Add some testing.
 Currently uninstalls the port, and disable parallel
 jobs for make.
+.It Fl T
+Try building BROKEN ports by defining TRYBROKEN for the build.
 .It Fl w
 Save WRKDIR on build failure.
 The WRKDIR will be tarred up into
@@ -503,8 +510,11 @@ can mount a directory containing option files if available.
 .Nm
 will check for any of these directories in this order:
 .Pp
+.Dl /usr/local/etc/poudriere.d/<jailname>-<tree>-<setname>-options
 .Dl /usr/local/etc/poudriere.d/<jailname>-<setname>-options
+.Dl /usr/local/etc/poudriere.d/<jailname>-<tree>-options
 .Dl /usr/local/etc/poudriere.d/<setname>-options
+.Dl /usr/local/etc/poudriere.d/<tree>-options
 .Dl /usr/local/etc/poudriere.d/<jailname>-options
 .Dl /usr/local/etc/poudriere.d/options
 .Pp

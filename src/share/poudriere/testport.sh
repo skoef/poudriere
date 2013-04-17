@@ -99,11 +99,11 @@ while getopts "o:cnj:J:iIp:svz:" FLAG; do
 	esac
 done
 
-test -z ${ORIGIN} && usage
+[ -z ${ORIGIN} ] && usage
 
 export SKIPSANITY
 
-test -z "${JAILNAME}" && err 1 "Don't know on which jail to run please specify -j"
+[ -z "${JAILNAME}" ] && err 1 "Don't know on which jail to run please specify -j"
 
 MASTERNAME=${JAILNAME}-${PTNAME}${SETNAME:+-${SETNAME}}
 MASTERMNT=${POUDRIERE_DATA}/build/${MASTERNAME}/ref
@@ -136,12 +136,7 @@ if ! POUDRIERE_BUILD_TYPE=bulk parallel_build ${JAILNAME} ${PTNAME} ${SETNAME} ;
 	exit 1
 fi
 
-bset status "depends:"
-
 unmarkfs prepkg ${MASTERMNT}
-
-injail make -C /usr/ports/${ORIGIN} pkg-depends extract-depends \
-	fetch-depends patch-depends build-depends lib-depends
 
 bset status "testing:"
 
@@ -149,10 +144,13 @@ PKGNAME=`injail make -C /usr/ports/${ORIGIN} -VPKGNAME`
 LOCALBASE=`injail make -C /usr/ports/${ORIGIN} -VLOCALBASE`
 : ${PREFIX:=$(injail make -C /usr/ports/${ORIGIN} -VPREFIX)}
 if [ "${USE_PORTLINT}" = "yes" ]; then
-	[ ! -x `which portlint` ] && err 2 "First install portlint if you want USE_PORTLINT to work as expected"
+	[ ! -x `which portlint` ] &&
+		err 2 "First install portlint if you want USE_PORTLINT to work as expected"
 	msg "Portlint check"
 	set +e
-	cd ${MASTERMNT}/usr/ports/${ORIGIN} && PORTSDIR="${MASTERMNT}/usr/ports" portlint -C | tee ${log}/logs/${PKGNAME}.portlint.log
+	cd ${MASTERMNT}/usr/ports/${ORIGIN} &&
+		PORTSDIR="${MASTERMNT}/usr/ports" portlint -C | \
+		tee ${log}/logs/${PKGNAME}.portlint.log
 	set -e
 fi
 [ ${NOPREFIX} -ne 1 ] && PREFIX="${BUILDROOT:-/prefix}/`echo ${PKGNAME} | tr '[,+]' _`"
@@ -180,6 +178,8 @@ if ! build_port /usr/ports/${ORIGIN}; then
 		stop_build /usr/ports/${ORIGIN} ${log}/logs/${PKGNAME}.log
 		exit 1
 	fi
+elif [ -f ${MASTERMNT}/usr/ports/${ORIGIN}/.keep ]; then
+	save_wrkdir ${MASTERMNT} "${PKGNAME}" "/usr/ports/${ORIGIN}" "noneed" ||:
 fi
 
 msg "Installing from package"
@@ -192,7 +192,7 @@ if [ $INTERACTIVE_MODE -gt 0 ]; then
 	msg "Installing run-depends"
 	# Install run-depends since this is an interactive test
 	echo "PACKAGES=/packages" >> ${MASTERMNT}/etc/make.conf
-	injail make -C /usr/ports/${ORIGIN} run-depends || \
+	injail make -C /usr/ports/${ORIGIN} run-depends ||
 		msg "Failed to install RUN_DEPENDS"
 
 	# Enable networking

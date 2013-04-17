@@ -53,9 +53,10 @@ Options:
                      built. Note that building from sources can use src.conf
 		     and jail-src.conf from /usr/local/etc/poudriere.d/.
 		     Other possible method are: \"allbsd\" retrieve a
-		     snapshot from allbsd.org's website or \"gjb\" for a
-		     snapshot from Glen Barber's website.
+		     snapshot from allbsd.org's website or \"ftp-archive\"
+		     for old releases that're no longer available on \"ftp\".
     -p tree       -- Specify which ports tree the jail to start/stop with
+    -P patch      -- Specify a patch file to apply to the source before committing.
     -t version    -- version to upgrade to
     -z set        -- Specify which SET the jail to start/stop with
 "
@@ -63,7 +64,7 @@ Options:
 }
 
 list_jail() {
-	[ ${QUIET} -eq 0 ] && \
+	[ ${QUIET} -eq 0 ] &&
 		printf '%-20s %-20s %-7s %-7s\n' "JAILNAME" "VERSION" "ARCH" "METHOD"
 	for j in $(find ${POUDRIERED}/jails -type d -maxdepth 1 -mindepth 1 -print); do
 		name=${j##*/}
@@ -78,9 +79,9 @@ delete_jail() {
 	test -z ${JAILNAME} && usage
 	jail_exists ${JAILNAME} || err 1 "No such jail: ${JAILNAME}"
 	msg_n "Removing ${JAILNAME} jail..."
-	destroyfs jail ${JAILNAME}
+	destroyfs ${JAILMNT} jail
 	rm -rf ${POUDRIERED}/jails/${JAILNAME} || :
-	echo done
+	echo " done"
 }
 
 cleanup_new_jail() {
@@ -95,9 +96,8 @@ update_version() {
 	osversion=`awk '/\#define __FreeBSD_version/ { print $3 }' ${JAILMNT}/usr/include/sys/param.h`
 	login_env=",UNAME_r=${release},UNAME_v=FreeBSD ${release},OSVERSION=${osversion}"
 
-	if [ "${ARCH}" = "i386" -a "${REALARCH}" = "amd64" ];then
+	[ "${ARCH}" = "i386" -a "${REALARCH}" = "amd64" ] &&
 		login_env="${login_env},UNAME_p=i386,UNAME_m=i386"
-	fi
 
 	sed -i "" -e "s/:\(setenv.*\):/:\1${login_env}:/" ${JAILMNT}/etc/login.conf
 	cap_mkdb ${JAILMNT}/etc/login.conf
@@ -106,7 +106,7 @@ update_version() {
 update_jail() {
 	local netargs
 	jail_exists ${JAILNAME} || err 1 "No such jail: ${JAILNAME}"
-	jail_runs && \
+	jail_runs ${JAILNAME} &&
 		err 1 "Unable to remove jail ${JAILNAME}: it is running"
 
 	METHOD=$(jget ${JAILNAME} method)
@@ -116,15 +116,17 @@ update_jail() {
 	fi
 	msg "Upgrading using ${METHOD}"
 	case ${METHOD} in
-	ftp)
+	ftp|ftp-archive)
 		MASTERMNT=$(jget ${JAILNAME} mnt)
 		MASTERNAME=${JAILNAME}
 		jstart 1
 		if [ -z "${TORELEASE}" ]; then
 			injail /usr/sbin/freebsd-update fetch install
 		else
-			yes | injail env PAGER=/bin/cat /usr/sbin/freebsd-update -r ${TORELEASE} upgrade install || err 1 "Fail to upgrade system"
-			yes | injail env PAGER=/bin/cat /usr/sbin/freebsd-update install || err 1 "Fail to upgrade system"
+			yes | injail env PAGER=/bin/cat /usr/sbin/freebsd-update -r ${TORELEASE} upgrade install ||
+				err 1 "Fail to upgrade system"
+			yes | injail env PAGER=/bin/cat /usr/sbin/freebsd-update install ||
+				err 1 "Fail to upgrade system"
 			jset ${JAILNAME} version ${TORELEASE}
 		fi
 		jstop
@@ -179,7 +181,7 @@ build_and_install_world() {
 	make -C ${JAILMNT}/usr/src buildworld ${MAKE_JOBS} ${MAKEWORLDARGS} || err 1 "Fail to build world"
 	msg "Starting make installworld"
 	make -C ${JAILMNT}/usr/src installworld DESTDIR=${JAILMNT} || err 1 "Fail to install world"
-	make -C ${JAILMNT}/usr/src DESTDIR=${JAILMNT} distrib-dirs && \
+	make -C ${JAILMNT}/usr/src DESTDIR=${JAILMNT} distrib-dirs &&
 	make -C ${JAILMNT}/usr/src DESTDIR=${JAILMNT} distribution
 }
 
@@ -197,11 +199,16 @@ install_from_svn() {
 	esac
 	if [ ${UPDATE} -eq 0 ]; then
 		msg_n "Checking out the sources from svn..."
-		svn -q co ${proto}://${SVN_HOST}/base/${VERSION} ${JAILMNT}/usr/src || err 1 "Fail "
+		svn -q co ${proto}://${SVN_HOST}/base/${VERSION} ${JAILMNT}/usr/src || err 1 " fail"
 		echo " done"
+		if [ -n "${SRCPATCHFILE}" ]; then
+			msg_n "Patching the sources with ${SRCPATCHFILE}"
+			svn -q patch ${SRCPATCHFILE} ${JAILMNT}/usr/src || err 1 " fail"
+			echo done
+		fi
 	else
 		msg_n "Updating the sources from svn..."
-		svn -q update ${JAILMNT}/usr/src || err 1 "Fail "
+		svn -q update ${JAILMNT}/usr/src || err 1 " fail"
 		echo " done"
 	fi
 	build_and_install_world
@@ -230,6 +237,11 @@ install_from_ftp() {
 	local URL V
 
 	V=${ALLBSDVER:-${VERSION}}
+	case $V in
+	[0-4].*) HASH=MD5 ;;
+	5.[0-4]*) HASH=MD5 ;;
+	*) HASH=SHA256 ;;
+	esac
 	if [ ${V%%.*} -lt 9 ]; then
 		msg "Fetching sets for FreeBSD ${V} ${ARCH}"
 		case ${METHOD} in
@@ -247,14 +259,15 @@ install_from_ftp() {
 			fi
 			URL="${FREEBSD_HOST}/pub/FreeBSD/${type}/${ARCH}/${V}" ;;
 		allbsd) URL="https://pub.allbsd.org/FreeBSD-snapshots/${ARCH}-${ARCH}/${V}-JPSNAP/ftp" ;;
+		ftp-archive) URL="ftp://ftp-archive.freebsd.org/pub/FreeBSD-Archive/old-releases/${ARCH}/${V}" ;;
 		esac
 		DISTS="base dict src games"
 		[ ${ARCH} = "amd64" ] && DISTS="${DISTS} lib32"
 		for dist in ${DISTS}; do
-			fetch_file ${JAILMNT}/fromftp/ ${URL}/$dist/CHECKSUM.SHA256 || \
+			fetch_file ${JAILMNT}/fromftp/ ${URL}/$dist/CHECKSUM.${HASH} ||
 				err 1 "Fail to fetch checksum file"
 			sed -n "s/.*(\(.*\...\)).*/\1/p" \
-				${JAILMNT}/fromftp/CHECKSUM.SHA256 | \
+				${JAILMNT}/fromftp/CHECKSUM.${HASH} | \
 				while read pkg; do
 				[ ${pkg} = "install.sh" ] && continue
 				# Let's retry at least one time
@@ -274,13 +287,14 @@ install_from_ftp() {
 					APPEND=""
 					;;
 			esac
-			cat ${JAILMNT}/fromftp/${SET}.* | \
-				tar --unlink -xpf - -C ${JAILMNT}/${APPEND} || err 1 " Fail" && echo " done"
+			(cat ${JAILMNT}/fromftp/${SET}.* || echo Error) | \
+				tar --unlink -xpf - -C ${JAILMNT}/${APPEND} || err 1 " fail"
+			echo " done"
 		done
 	else
 		local type
 		case ${METHOD} in
-			ftp|gjb)
+			ftp|gjb|ftp-archive)
 				case ${VERSION} in
 					*-CURRENT|*-PRERELEASE|*-STABLE) type=snapshots ;;
 					*) type=releases ;;
@@ -303,7 +317,8 @@ install_from_ftp() {
 			msg "Fetching ${dist} for FreeBSD ${V} ${ARCH}"
 			fetch_file ${JAILMNT}/fromftp/${dist} ${URL}/${dist}
 			msg_n "Extracting ${dist}..."
-			tar -xpf ${JAILMNT}/fromftp/${dist} -C  ${JAILMNT}/ || err 1 " fail" && echo " done"
+			tar -xpf ${JAILMNT}/fromftp/${dist} -C  ${JAILMNT}/ || err 1 " fail"
+			echo " done"
 		done
 	fi
 
@@ -317,26 +332,22 @@ create_jail() {
 
 	test -z ${VERSION} && usage
 
-	[ "${JAILNAME#*.*}" = "${JAILNAME}" ] || err 1 "The jailname can not contain a period (.). See jail(8)"
+	[ "${JAILNAME#*.*}" = "${JAILNAME}" ] ||
+		err 1 "The jailname can not contain a period (.). See jail(8)"
 
 	if [ -z ${JAILMNT} ]; then
 		[ -z ${BASEFS} ] && err 1 "Please provide a BASEFS variable in your poudriere.conf"
 		JAILMNT=${BASEFS}/jails/${JAILNAME}
 	fi
 
-	if [ -z ${JAILFS} ] ; then
+	if [ -z ${JAILFS} ]; then
 		[ -z ${ZPOOL} ] && err 1 "Please provide a ZPOOL variable in your poudriere.conf"
 		JAILFS=${ZPOOL}${ZROOTFS}/jails/${JAILNAME}
 	fi
 
 	case ${METHOD} in
-	ftp)
+	ftp|gjb|ftp-archive)
 		FCT=install_from_ftp
-		;;
-	gjb)
-		FCT=install_from_ftp
-		GJBVERSION=${VERSION}
-		VERSION=${VERSION%%-*}
 		;;
 	allbsd)
 		FCT=install_from_ftp
@@ -344,9 +355,7 @@ create_jail() {
 			https://pub.allbsd.org/FreeBSD-snapshots/${ARCH}-${ARCH}/ | \
 			sed -n "s,.*href=\"\(.*${VERSION}.*\)-JPSNAP/\".*,\1,p" | \
 			sort -k 3 -t - -r | head -n 1 `
-		if [ -z ${ALLBSDVER} ]; then
-			err 1 "Unknown version $VERSION"
-		fi
+		[ -z ${ALLBSDVER} ] && err 1 "Unknown version $VERSION"
 
 		OIFS=${IFS}
 		IFS=-
@@ -361,15 +370,18 @@ create_jail() {
 			stable/*![0-9]*)
 				err 1 "bad version number for stable version"
 				;;
+			head@*![0-9]*)
+				err 1 "bad revision number for head version"
+				;;
 			release/*![0-9]*.[0-9].[0-9])
 				err 1 "bad version number for release version"
 				;;
 			releng/*![0-9]*.[0-9])
 				err 1 "bad version number for releng version"
 				;;
-			stable/*|head|release/*|releng/*.[0-9]) ;;
+			stable/*|head*|release/*|releng/*.[0-9]) ;;
 			*)
-				err 1 "version with svn should be: head or stable/N or release/N or releng/N"
+				err 1 "version with svn should be: head[@rev] or stable/N or release/N or releng/N"
 				;;
 		esac
 		FCT=install_from_svn
@@ -413,7 +425,7 @@ create_jail() {
 	jset ${JAILNAME} version ${RELEASE}
 	update_version ${RELEASE}
 
-	if [ "${ARCH}" = "i386" -a "${REALARCH}" = "amd64" ];then
+	if [ "${ARCH}" = "i386" -a "${REALARCH}" = "amd64" ]; then
 		cat > ${JAILMNT}/etc/make.conf << EOF
 ARCH=i386
 MACHINE=i386
@@ -458,7 +470,7 @@ SCRIPTPATH=`realpath $0`
 SCRIPTPREFIX=`dirname ${SCRIPTPATH}`
 . ${SCRIPTPREFIX}/common.sh
 
-while getopts "J:j:v:a:z:m:n:f:M:sdklqcip:ut:z:" FLAG; do
+while getopts "J:j:v:a:z:m:n:f:M:sdklqcip:ut:z:P:" FLAG; do
 	case "${FLAG}" in
 		j)
 			JAILNAME=${OPTARG}
@@ -470,9 +482,8 @@ while getopts "J:j:v:a:z:m:n:f:M:sdklqcip:ut:z:" FLAG; do
 			VERSION=${OPTARG}
 			;;
 		a)
-			if [ "${REALARCH}" != "amd64" -a "${REALARCH}" != ${OPTARG} ]; then
+			[ "${REALARCH}" != "amd64" -a "${REALARCH}" != ${OPTARG} ] &&
 				err 1 "Only amd64 host can choose another architecture"
-			fi
 			ARCH=${OPTARG}
 			;;
 		m)
@@ -502,6 +513,10 @@ while getopts "J:j:v:a:z:m:n:f:M:sdklqcip:ut:z:" FLAG; do
 		p)
 			PTNAME=${OPTARG}
 			;;
+		P)
+			[ -f ${OPTARG} ] || err 1 "No such patch"
+			SRCPATCHFILE=${OPTARG}
+			;;
 		q)
 			QUIET=1
 			;;
@@ -522,14 +537,11 @@ while getopts "J:j:v:a:z:m:n:f:M:sdklqcip:ut:z:" FLAG; do
 done
 
 METHOD=${METHOD:-ftp}
-if [ -n "${JAILNAME}" ] && [ ${CREATE} -eq 0 ]; then
+if [ -n "${JAILNAME}" -a ${CREATE} -eq 0 ]; then
 	ARCH=$(jget ${JAILNAME} arch)
 	JAILFS=$(jget ${JAILNAME} fs)
 	JAILMNT=$(jget ${JAILNAME} mnt)
 fi
-
-
-[ $(( CREATE + LIST + STOP + START + DELETE + UPDATE )) -lt 1 ] && usage
 
 case "${CREATE}${LIST}${STOP}${START}${DELETE}${UPDATE}" in
 	100000)
@@ -559,5 +571,8 @@ case "${CREATE}${LIST}${STOP}${START}${DELETE}${UPDATE}" in
 	000001)
 		test -z ${JAILNAME} && usage
 		update_jail
+		;;
+	*)
+		usage
 		;;
 esac
