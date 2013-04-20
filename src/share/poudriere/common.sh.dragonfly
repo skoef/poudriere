@@ -1,0 +1,342 @@
+#!/bin/sh
+# DRAGONFLY SPECIFIC DEFINITIONS
+
+PORTSRC=/usr/dports
+PORTLOC=dports
+STD_DISTFILES=/usr/distfiles
+STD_PACKAGES=/usr/packages
+NULLMOUNT="/sbin/mount_null"
+NULLFSREF="null"
+NO_ZFS=TRUE
+USE_TMPFS=true
+TMPFS_WRKDIR=0
+TMPFS_DATA=0
+TMPFS_ALL=0
+TMPFS_LOCALBASE=0
+
+injail()  {
+	chroot ${MASTERMNT}${MY_JOBID+/../${MY_JOBID} $@
+}
+
+append_make() {
+	[ $# -ne 2 ] && eargs mnt makeconf
+	local mnt=$1
+	local makeconf=$2
+
+	if [ "${makeconf}" = "-" ]; then
+		makeconf="${POUDRIERED}/make.conf"
+	else
+		makeconf="${POUDRIERED}/${makeconf}-make.conf"
+	fi
+
+	[ -f "${makeconf}" ] || return 0
+	makeconf="$(realpath ${makeconf} 2>/dev/null)"
+	msg "Appending to /etc2/make.conf: ${makeconf}"
+	echo "#### ${makeconf} ####" >> ${mnt}/etc2/make.conf
+	cat "${makeconf}" >> ${mnt}/etc2/make.conf
+}
+
+jail_runs() {
+	[ $# -ne 1 ] && eargs jname
+	local check=$(jget ${1} status)
+	[ "${check}" = "idle:" ] && return 0
+	return 1
+}
+
+jail_start() {
+	[ $# -lt 2 ] && eargs name ptname setname
+	local name=$1
+	local ptname=$2
+	local setname=$3
+	local arch=$(jget ${name} arch)
+	local mnt=$(jget ${name} mnt)
+	local NEEDFS="${NULLFSREF} procfs tmpfs"
+	local BASEIMG=${MASTERMNT}/ref
+
+	jail_exists ${name} || err 1 "No such jail: ${name}"
+	jail_runs ${MASTERNAME} && err 1 "jail already running: ${MASTERNAME}"
+
+	if [ -z "${NOLINUX}" ]; then
+		if [ "${arch}" = "i386" ]; then
+			NEEDFS="${NEEDFS} linprocfs"
+			sysctl -n compat.linux.osrelease >/dev/null 2>&1 || kldload linux
+		fi
+	fi
+	for fs in ${NEEDFS}; do
+		lsvfs $fs >/dev/null 2>&1 || kldload $fs
+	done
+	bset status "initializing:"
+
+	mkdir -p ${BASEIMG}
+	mount_tmpfs -s 400M tmpfs ${BASEIMG}
+	cpdup -x -VV -i0 ${mnt}/ ${BASEIMG}/
+	mv ${BASEIMG}/etc ${BASEIMG}/etc2
+	mv ${BASEIMG}/var ${BASEIMG}/var2
+	mkdir ${BASEIMG}/etc \
+	      ${BASEIMG}/var \
+	      ${BASEIMG}/usr/local
+
+	[ -n "${RESOLV_CONF}" ] && cp -v "${RESOLV_CONF}" "${BASEIMG}/etc2/"
+
+	if [ -d "${CCACHE_DIR:-/nonexistent}" ]; then
+		echo "WITH_CCACHE_BUILD=yes" >> ${tomnt}/etc2/make.conf
+		echo "MAKE_ENV+= CCACHE_DIR=/ccache" >> ${tomnt}/etc2/make.conf
+	fi
+	echo "PACKAGES=/packages" >> ${tomnt}/etc2/make.conf
+	echo "DISTDIR=/distfiles" >> ${tomnt}/etc2/make.conf
+
+	makeconf="- ${setname} ${ptname} ${name} ${name}-${ptname}"
+	[ -n "${setname}" ] && makeconf="${makeconf} ${name}-${setname}"
+	makeconf="${makeconf} ${MASTERNAME}"
+	for opt in ${makeconf}; do
+		append_make ${tomnt} ${opt}
+	done
+
+	# The master jail is malleable so /etc/ can be modified later
+	# The slave jails are read only.  All have same source
+
+	[ -z "${NO_PACKAGE_BUILDING}" ] && export PACKAGE_BUILDING=yes
+	[ ${SET_STATUS_ON_START-1} -eq 1 ] && export STATUS=1
+
+	export HOME=/root
+	export USER=root
+	export FORCE_PACKAGE=yes
+	export PKGNG=1
+	export PKG_EXT="txz"
+	export PKG_ADD="${LOCALBASE:-/usr/local}/sbin/pkg add"
+	export PKG_DELETE="${LOCALBASE:-/usr/local}/sbin/pkg delete -y -f"
+}
+
+jail_stop() {
+	[ $# -ne 0 ] && eargs
+	local mnt
+	bset status "stop:"
+
+	cd /
+	msg "Umounting file systems"
+	mnt=`realpath ${MASTERMNT:-${JAILMNT}}`
+	mount | awk -v mnt="${mnt}/" 'BEGIN{ gsub(/\//, "\\\/", mnt); } { if ($3 ~ mnt && $1 !~ /\/dev\/md/ ) { print $3 }}' |  sort -r | xargs umount || :
+	umount ${mnt} || :
+
+	export STATUS=0
+}
+
+jail_dismount() {
+	[ $# -ne 0 ] && eargs
+	local mnt
+
+	cd /
+	msg "Umounting file systems"
+	mnt=`realpath ${JAILMNT}`
+	mount | awk -v mnt="${mnt}" '{ if ($3 ~ mnt && $1 !~ /\/dev\/md/ ) { print $3 }}' |  sort -r | xargs umount -v || :
+}
+
+dismount() {
+	[ $# -ne 1 ] && eargs mountpoint
+	umount ${1} || :
+}
+
+create_slave() {
+	[ $# -ne 1 ] && eargs job-number
+	local task="${1}"
+	local mnt="${MASTERMNT}/${task}"
+	local arch=$(jget ${jname} arch)
+	local BASEIMG=${MASTERMNT}/ref
+
+	bset ${task} status "genesis:"
+	if [ -f ${mnt}/virgin ]; then
+	    job_msg "Jail     Mounting"
+	    # Make one-time readonly duplicate of base image, virgin hidden
+	    ${NULLMOUNT} -o rdonly ${BASEIMG} ${mnt}
+	    do_jail_mounts ${mnt} ${arch}
+	    do_portbuild_mounts ${mnt} ${jname} ${ptname} ${setname}
+	else
+	    job_msg "Jail     Renovating"
+	fi
+	# Refresh /usr/local and /etc and /var
+	mount_tmpfs -s 100M  tmpfs ${mnt}/tmp
+	mount_tmpfs -s 7G    tmfps ${mnt}/wrkdirs
+	mount_tmpfs -s 12M   tmpfs ${mnt}/etc
+	mount_tmpfs -s 100M  tmpfs ${mnt}/var
+	mount_tmpfs -s 64K   tmpfs ${mnt}/compat
+	mount_tmpfs -s 2500M tmpfs ${mnt}/usr/local
+	mkdir -p ${mnt}/compat/linprocfs \
+		 ${mnt}/compat/linux/proc \
+		 ${mnt}/compat/svr4
+	cp -a ${mnt}/etc2/* ${mnt}/etc/
+	cp -a ${mnt}/var2/* ${mnt}/var/
+
+	JAILMNT=${mnt} injail /usr/sbin/mtree -q -U -f \
+	   ${PORTSRC}/Templates/BSD.local.dist -d -e -p /usr/local >/dev/null
+
+	job_msg "Jail     Ready"
+}
+
+do_jail_mounts() {
+	[ $# -ne 2 ] && eargs mnt arch
+	local mnt=$1
+	local arch=$2
+
+	mount -t devfs devfs ${mnt}/dev
+	mount -t procfs proc ${mnt}/proc
+
+	if [ -z "${NOLINUX}" ]; then
+		if [ "${arch}" = "i386" ]; then
+			mount -t linprocfs linprocfs ${mnt}/compat/linux/proc
+		fi
+	fi
+}
+
+do_portbuild_mounts() {
+	[ $# -lt 3 ] && eargs mnt jname ptname setname
+	local mnt=$1
+	local jname=$2
+	local ptname=$3
+	local setname=$4
+	local optionsdir
+
+	mkdir -p ${POUDRIERE_DATA}/packages/${MASTERNAME}/All
+	[ -d "${CCACHE_DIR:-/nonexistent}" ] &&
+		${NULLMOUNT} ${CCACHE_DIR} ${mnt}/ccache
+
+	${NULLMOUNT} -o ro ${PORTSDIR} ${mnt}/${PORTSRC} || 
+		err 1 "Failed to mount the ports directory "
+	${NULLMOUNT} ${POUDRIERE_DATA}/packages/${MASTERNAME} ${mnt}/${STD_PACKAGES} ||
+		err 1 "Failed to mount the packages directory "
+	${NULLMOUNT} ${DISTFILES_CACHE} ${mnt}/${STD_DISTFILES} ||
+		err 1 "Failed to mount the distfiles cache directory"
+
+	optionsdir="${MASTERNAME}"
+	[ -n "${setname}" ] && optionsdir="${optionsdir} ${jname}-${setname}"
+	optionsdir="${optionsdir} ${jname}-${ptname} ${setname} ${ptname} ${jname} -"
+
+	for opt in ${optionsdir}; do
+		use_options ${mnt} ${opt} && break || continue
+	done
+
+	return 0
+}
+
+destroy_slave() {
+	[ $# -ne 2 ] && eargs job-number
+	local task="${1}"
+	local mnt="${MASTERMNT}/${task}"
+	bset ${task} status "dismounting:${task}"
+
+	# make sure cwd is not on mount
+	cd /
+
+	# Repeat dismount attempts in case 1 or more failed
+	# This also helps reap mount on previous failed attempts
+	for x in 1 2; do
+	   [ ${x} -eq 1 ] && sleep 3
+	   dismount ${mnt}/tmp
+	   dismount ${mnt}/wrkdirs
+	   dismount ${mnt}/etc
+	   dismount ${mnt}/var
+	   dismount ${mnt}/compat/linprocfs
+	   dismount ${mnt}/compat/srv4
+	   dismount ${mnt}/compat
+	   dismount ${mnt}/usr/local
+	done
+
+	bset ${task} status "available:"
+}
+
+start_builders() {
+	local task mnt
+
+	bset builders "${JOBS}"
+	bset status "starting_builders:"
+	for task in ${JOBS}; do
+		local mnt="${MASTERMNT}/${task}"
+		mkdir -p ${mnt}
+		touch ${mnt}/virgin
+	done
+	bset epoch "$(date '+%s')"
+}
+
+
+stop_builders() {
+	local mnt
+
+	# wait for the last running processes
+	cat ${MASTERMNT}/poudriere/var/run/*.pid 2>/dev/null | xargs pwait 2>/dev/null
+
+	msg "Stopping ${PARALLEL_JOBS} builders"
+
+	# wait for slaves to finish dismounting
+	sleep 3
+
+	cd /
+	mnt=`realpath ${JAILMNT}`
+	mount | awk -v mnt="${MASTERMNT}/" 'BEGIN{ gsub(/\//, "\\\/", mnt); } { if ($3 ~ mnt) { print $3 }}' |  sort -r | xargs umount || :
+
+	# No builders running, unset JOBS
+	JOBS=""
+}
+
+zfs_getfs() {
+	# NO-OP always
+}
+
+jstop() {
+	# NO-OP for chroot
+}
+
+jstart() {
+	# NO-OP for chroot
+}
+
+killtree() {
+	local _pid=${1}
+	local _sig=${2}
+	local _child
+	local _children
+
+	# stop parent from attempting to folk
+	kill -17 ${_pid} 2>/dev/null
+	if [ $? -eq 0 ]; then
+	   _children=$(pgrep -P ${_pid})
+	   for _child in ${children}; do
+	      killtree ${_child} ${_sig}
+	   done
+	   kill -${_sig} ${_pid}
+	fi
+}
+
+cleanup() {
+	[ -n "${CLEANED_UP}" ] && return 0
+	# Prevent recursive cleanup on error
+	if [ -n "${CLEANING_UP}" ]; then
+		echo "Failure cleaning up. Giving up." >&2
+		return
+	fi
+	export CLEANING_UP=1
+	msg "Cleaning up"
+
+	# If this is a builder, don't cleanup, the master will handle that.
+	if [ -n "${MY_JOBID}" ]; then
+		[ -n "${PKGNAME}" ] && clean_pool ${PKGNAME} 1 || :
+		return 0
+	fi
+
+	[ -n "${MASTERNAME}" ] && rm -rf \
+		${POUDRIERE_DATA}/packages/${MASTERNAME}/.new_packages
+
+	bset epoch "0"
+	# Only bother with this if using jails as this may be being ran
+	# from queue.sh or daemon.sh, etc.
+	if [ -n "${MASTERMNT}" -a -n "${MASTERNAME}" ]; then
+		if [ -d ${MASTERMNT}/poudriere/var/run ]; then
+			for pid in ${MASTERMNT}/poudriere/var/run/*.pid; do
+				# Ensure there is a pidfile to read or break
+				[ "${pid}" = "${MASTERMNT}/poudriere/var/run/*.pid" ] && break
+				killtree `cat ${pid}` 9 || :
+			done
+		fi
+		wait
+	fi
+
+	export CLEANED_UP=1
+}

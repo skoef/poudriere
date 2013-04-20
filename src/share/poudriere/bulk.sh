@@ -44,8 +44,8 @@ Options:
     -s          -- Skip sanity checks
     -J n        -- Run n jobs in parallel (Default: to 8)
     -j name     -- Run only on the given jail
-    -N          -- Do not build package repository or INDEX when build completed
     -p tree     -- Specify on which ports tree the bulk build will be done
+    -r          -- Execute pkg repo command when bulk completes
     -v          -- Be verbose; show more information. Use twice to enable debug output
     -w          -- Save WRKDIR on failed builds
     -z set      -- Specify which SET to use
@@ -61,7 +61,7 @@ clean_restricted() {
 	# mount_nullfs does not support mount -u
 	umount ${MASTERMNT}/packages
 	mount_packages
-	injail make -C /usr/ports -j ${PARALLEL_JOBS} clean-restricted >/dev/null
+	injail make -C ${PORTSRC} -j ${PARALLEL_JOBS} clean-restricted >/dev/null
 	# Remount ro
 	umount ${MASTERMNT}/packages
 	mount_packages -o ro
@@ -94,8 +94,8 @@ build_repo() {
 			[ "${pkg}" = "${POUDRIERE_DATA}/packages/${MASTERNAME}/All/*.tbz" ] && break
 			msg_verbose "Extracting description for ${ORIGIN} ..."
 			ORIGIN=$(pkg_get_origin ${pkg_file})
-			[ -d ${MASTERMNT}/usr/ports/${ORIGIN} ] &&
-				injail make -C /usr/ports/${ORIGIN} describe >> ${INDEXF}.1
+			[ -d ${MASTERMNT}${PORTSRC}/${ORIGIN} ] &&
+				injail make -C ${PORTSRC}/${ORIGIN} describe >> ${INDEXF}.1
 		done
 
 		msg_n "Generating INDEX..."
@@ -118,12 +118,12 @@ SETNAME=""
 CLEAN=0
 CLEAN_LISTED=0
 ALL=0
-BUILD_REPO=1
+BUILD_REPO=0
 . ${SCRIPTPREFIX}/common.sh
 
 [ $# -eq 0 ] && usage
 
-while getopts "B:f:j:J:CcNp:RFtTsvwz:a" FLAG; do
+while getopts "B:f:j:J:Ccp:RFtTsvwz:ar" FLAG; do
 	case "${FLAG}" in
 		B)
 			BUILDNAME="${OPTARG}"
@@ -154,8 +154,8 @@ while getopts "B:f:j:J:CcNp:RFtTsvwz:a" FLAG; do
 		J)
 			PARALLEL_JOBS=${OPTARG}
 			;;
-		N)
-			BUILD_REPO=0
+		r)
+			BUILD_REPO=1
 			;;
 		p)
 			PTNAME=${OPTARG}
@@ -214,6 +214,8 @@ else
 	LISTPORTS="$@"
 fi
 
+check_jobs
+
 export POUDRIERE_BUILD_TYPE=bulk
 
 jail_start ${JAILNAME} ${PTNAME} ${SETNAME}
@@ -226,10 +228,15 @@ fi
 
 prepare_ports
 
+run_hook bulk_build_start "${JAILNAME}" "${PTNAME}" `bget stats_queued`
+
 bset status "building:"
 
 [ -z "${PORTTESTING}" -a -z "${ALLOW_MAKE_JOBS}" ] &&
 	echo "DISABLE_MAKE_JOBS=yes" >> ${MASTERMNT}/etc/make.conf
+
+[ -n "${JOBS_LIMIT}" ] &&
+	echo "MAKE_JOBS_NUMBER=${JOBS_LIMIT}" >> ${MASTERMNT}/etc/make.conf
 
 markfs prepkg ${MASTERMNT}
 
@@ -285,5 +292,7 @@ fi
 msg "[${MASTERNAME}] $nbbuilt packages built, $nbfailed failures, $nbignored ignored, $nbskipped skipped"
 
 set +e
+run_hook bulk_build_ended "${JAILNAME}" "${PTNAME}" "${nbbuilt}" \
+	"${nbfailed}" "${nbignored}" "${nbskipped}"
 
 exit $((nbfailed + nbskipped))

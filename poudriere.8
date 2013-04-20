@@ -62,6 +62,9 @@ This command gives you control to manage the jails used by
 to provide building environment (different
 .Dx versions, different
 architectures).
+.It combo
+This command works on jail-port build combinations.  The options are
+kept out of bulk to avoid damage by a command to a running bulk build.
 .It ports
 This command allows you to manage different portstrees which will be used
 by
@@ -180,11 +183,6 @@ Starts a jail.
 Kills a jail (stops it).
 .It Fl u
 Update a jail using full buildworld.
-.It Fl i
-Show information about the jail.
-.It Fl C
-Attempts to remove all poudriere mounts.  It is normally used to clean up
-leftover mounts after aborting a run with control-c.
 .El
 .Pp
 Except for
@@ -230,6 +228,31 @@ when creating jail.
 instead of upgrading to the latest security fix of the jail version, you can
 jump to the new specified
 .Ar version .
+.El
+.Ss combo
+.pp
+These subcommands are mutually exclusive.
+.Bl -tag -width "-f conffile"
+.It Fl C
+Attempts to remove all poudriere mounts.  It is normally used to clean up
+leftover mounts after aborting a run with control-c.
+.It Fl i
+Show information about the jail.
+.It Fl x
+List all failed ports in last or ongoing build
+.El
+.Pp
+Here are the options associated with the
+.Cm combo
+command.
+.Bl -tag -width "-f conffile"
+.It Fl j Ar name
+If given, reference bulk build using the jail name
+.Ar name
+.It Fl p Ar tree
+This required flag specifies on which ports
+.Ar tree
+is used for the reference bulk build.
 .El
 .Ss ports
 .Pp

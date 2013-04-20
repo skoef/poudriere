@@ -116,7 +116,7 @@ DISTFILES_CACHE=/usr/ports/distfiles
 # NO_RESTRICTED=yes
 
 # Set the host for the git update method
-GIT_HOST=koan.bondconsult.net
+DFLY_GIT_URL=git://koan.bondconsult.net/dragonfly.git
 
 # Set the URL for the dports git repository
 DPORTS_URL=git://github.com/jrmarino/DPorts.git

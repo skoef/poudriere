@@ -1,0 +1,574 @@
+#!/bin/sh
+# FREEBSD SPECIFIC DEFINITIONS
+
+PORTSRC=/usr/ports
+PORTLOC=ports
+STD_DISTFILES=${PORTSRC}/distfiles
+STD_PACKAGES=${PORTSRC}/packages
+NULLMOUNT="/sbin/mount -t nullfs"
+NULLFSREF="nullfs"
+TMPFS_WRKDIR=0
+TMPFS_DATA=0
+TMPFS_ALL=0
+TMPFS_LOCALBASE=0
+
+# zfs namespace
+NS="poudriere"
+IPS="$(sysctl -n kern.features.inet 2>/dev/null || echo 0)$(sysctl -n kern.features.inet6 2>/dev/null || echo 0)"
+RELDATE=$(sysctl -n kern.osreldate)
+JAILED=$(sysctl -n security.jail.jailed)
+
+injail() {
+	jexec -U root ${MASTERNAME}${MY_JOBID+-job-${MY_JOBID}} $@
+}
+
+append_make() {
+	[ $# -ne 2 ] && eargs mnt makeconf
+	local mnt=$1
+	local makeconf=$2
+
+	if [ "${makeconf}" = "-" ]; then
+		makeconf="${POUDRIERED}/make.conf"
+	else
+		makeconf="${POUDRIERED}/${makeconf}-make.conf"
+	fi
+
+	[ -f "${makeconf}" ] || return 0
+	makeconf="$(realpath ${makeconf} 2>/dev/null)"
+	msg "Appending to /etc/make.conf: ${makeconf}"
+	echo "#### ${makeconf} ####" >> ${mnt}/etc/make.conf
+	cat "${makeconf}" >> ${mnt}/etc/make.conf
+}
+
+jstart() {
+	local network="${localipargs}"
+	[ $1 -eq 1 ] && network="${ipargs}"
+
+	jail -c persist name=${MASTERNAME}${MY_JOBID+-job-${MY_JOBID}} \
+		path=${MASTERMNT}${MY_JOBID+/../${MY_JOBID}} \
+		host.hostname=${MASTERNAME}${MY_JOBID+-job-${MY_JOBID}} \
+		${network} \
+		allow.socket_af allow.raw_sockets allow.chflags allow.sysvipc
+}
+
+jstop() {
+	jail -r ${MASTERNAME}${MY_JOBID+-job-${MY_JOBID}} 2>/dev/null || :
+}
+
+jail_runs() {
+	[ $# -ne 1 ] && eargs jname
+	local jname=$1
+	jls -j $jname >/dev/null 2>&1 && return 0
+	return 1
+}
+
+jail_start() {
+	[ $# -lt 2 ] && eargs name ptname setname
+	local name=$1
+	local ptname=$2
+	local setname=$3
+	local portsdir=$(pget ${ptname} mnt)
+	local arch=$(jget ${name} arch)
+	local mnt=$(jget ${name} mnt)
+	local needfs="${NULLFSREF} procfs"
+	local makeconf
+
+	local tomnt=${POUDRIERE_DATA}/build/${MASTERNAME}/ref
+
+	[ -d ${DISTFILES_CACHE:-/nonexistent} ] || err 1 "DISTFILES_CACHE directory does not exist. (c.f. poudriere.conf)"
+
+	if [ -z "${NOLINUX}" ]; then
+		if [ "${arch}" = "i386" -o "${arch}" = "amd64" ]; then
+			needfs="${needfs} linprocfs linsysfs"
+			sysctl -n compat.linux.osrelease >/dev/null 2>&1 || kldload linux
+		fi
+	fi
+	[ -n "${USE_TMPFS}" ] && NEEDFS="${NEEDFS} tmpfs"
+	for fs in ${needfs}; do
+		if ! lsvfs $fs >/dev/null 2>&1; then
+			if [ $JAILED -eq 0 ]; then
+				kldload $fs
+			else
+				err 1 "please load the $fs module on host using \"kldload $fs\""
+			fi
+		fi
+	done
+	jail_exists ${name} || err 1 "No such jail: ${name}"
+	jail_runs ${MASTERNAME} && err 1 "jail already running: ${MASTERNAME}"
+	export HOME=/root
+	export USER=root
+	export FORCE_PACKAGE=yes
+	if [ -z "${NO_PACKAGE_BUILDING}" ]; then
+		export PACKAGE_BUILDING=yes
+	fi
+
+	[ ${SET_STATUS_ON_START-1} -eq 1 ] && export STATUS=1
+	msg_n "Creating the reference jail..."
+	clonefs ${mnt} ${tomnt} clean
+	echo " done"
+
+	msg "Mounting system devices for ${MASTERNAME}"
+	do_jail_mounts ${tomnt} ${arch}
+
+	[ -d "${portsdir}/ports" ] && portsdir="${portsdir}/ports"
+	msg "Mounting ports/packages/distfiles"
+	do_portbuild_mounts ${tomnt} ${name} ${ptname} ${setname}
+
+	if [ -n "${POUDRIERE_BUILD_TYPE}" ]; then
+		show_log_info
+	fi
+
+	if [ -d "${CCACHE_DIR:-/nonexistent}" ]; then
+		echo "WITH_CCACHE_BUILD=yes" >> ${tomnt}/etc/make.conf
+		echo "MAKE_ENV+= CCACHE_DIR=/ccache" >> ${tomnt}/etc/make.conf
+	fi
+	echo "PACKAGES=/packages" >> ${tomnt}/etc/make.conf
+	echo "DISTDIR=/distfiles" >> ${tomnt}/etc/make.conf
+
+	makeconf="- ${setname} ${ptname} ${name} ${name}-${ptname}"
+	[ -n "${setname}" ] && makeconf="${makeconf} ${name}-${setname}"
+	makeconf="${makeconf} ${MASTERNAME}"
+	for opt in ${makeconf}; do
+		append_make ${tomnt} ${opt}
+	done
+
+	test -n "${RESOLV_CONF}" && cp -v "${RESOLV_CONF}" "${tomnt}/etc/"
+	msg "Starting jail ${MASTERNAME}"
+	jstart 0
+	# Only set STATUS=1 if not turned off
+	# jail -s should not do this or jail will stop on EXIT
+	WITH_PKGNG=$(injail make -f ${PORTSRC}/Mk/bsd.port.mk -V WITH_PKGNG)
+	if [ -n "${WITH_PKGNG}" ]; then
+		export PKGNG=1
+		export PKG_EXT="txz"
+		export PKG_ADD="${LOCALBASE:-/usr/local}/sbin/pkg add"
+		export PKG_DELETE="${LOCALBASE:-/usr/local}/sbin/pkg delete -y -f"
+	else
+		export PKGNG=0
+		export PKG_ADD=pkg_add
+		export PKG_DELETE=pkg_delete
+		export PKG_EXT="tbz"
+	fi
+
+	# 8.3 did not have distrib-dirs ran on it, so various
+	# /usr and /var dirs are missing. Namely /var/games
+	if [ "$(injail uname -r | cut -d - -f 1 )" = "8.3" ]; then
+		injail mtree -eu -f /etc/mtree/BSD.var.dist -p /var >/dev/null 2>&1 || :
+		injail mtree -eu -f /etc/mtree/BSD.usr.dist -p /usr >/dev/null 2>&1 || :
+	fi
+}
+
+jail_stop() {
+	[ $# -ne 0 ] && eargs
+	jail_runs ${MASTERNAME} || err 1 "No such jail running: ${MASTERNAME}"
+	local fs=$(zfs_getfs ${MASTERMNT})
+
+	# err() will set status to 'crashed', don't override.
+	[ -n "${CRASHED}" ] || bset status "stop:" 2>/dev/null || :
+
+	jstop
+	# Shutdown all builders
+	if [ ${PARALLEL_JOBS} -ne 0 ]; then
+		# - here to only check for unset, {start,stop}_builders will set this to blank if already stopped
+		for j in ${JOBS-$(jot -w %02d ${PARALLEL_JOBS})}; do
+			MY_JOBID=${j} jstop
+			destroyfs ${MASTERMNT}/../${j} jail || :
+		done
+	fi
+	msg "Umounting file systems"
+	destroyfs ${MASTERMNT} jail
+	rm -rf ${MASTERMNT}/../
+	export STATUS=0
+}
+
+do_jail_mounts() {
+	[ $# -ne 2 ] && eargs mnt arch
+	local mnt=$1
+	local arch=$2
+	local devfspath="null zero random urandom stdin stdout stderr fd fd/*"
+
+	# clone will inherit from the ref jail
+	if [ ${mnt##*/} = "ref" ]; then
+		mkdir -p ${mnt}/proc
+		mkdir -p ${mnt}/dev
+		mkdir -p ${mnt}/compat/linux/proc
+		mkdir -p ${mnt}${PORTSRC}
+		mkdir -p ${mnt}/wrkdirs
+		mkdir -p ${mnt}/${LOCALBASE:-/usr/local}
+		mkdir -p ${mnt}/distfiles
+		mkdir -p ${mnt}/packages
+		mkdir -p ${mnt}/new_packages
+		mkdir -p ${mnt}/ccache
+		mkdir -p ${mnt}/var/db/ports
+	fi
+
+	# ref jail only needs devfs
+	mount -t devfs devfs ${mnt}/dev
+	devfs -m ${mnt}/dev rule apply hide
+	for p in ${devfspath} ; do
+		devfs -m ${mnt}/dev/ rule apply path "${p}" unhide
+	done
+	if [ "${mnt##*/}" != "ref" ]; then
+		[ ${JAILED} -eq 0 ] && mount -t fdescfs fdesc ${mnt}/dev/fd
+		mount -t procfs proc ${mnt}/proc
+		if [ -z "${NOLINUX}" ]; then
+			[ "${arch}" = "i386" -o "${arch}" = "amd64" ] &&
+				mount -t linprocfs linprocfs ${mnt}/compat/linux/proc
+			fi
+		fi
+
+	return 0
+}
+
+mount_packages() {
+	local mnt=$(my_path)
+	${NULLMOUNT} "$@" ${POUDRIERE_DATA}/packages/${MASTERNAME} \
+		${mnt}/packages ||
+		err 1 "Failed to mount the packages directory "
+}
+
+do_portbuild_mounts() {
+	[ $# -lt 3 ] && eargs mnt jname ptname setname
+	local mnt=$1
+	local jname=$2
+	local ptname=$3
+	local setname=$4
+	local portsdir=$(pget ${ptname} mnt)
+	local optionsdir
+
+	[ -d ${portsdir}/${PORTLOC} ] && portsdir=${portsdir}/${PORTLOC}
+
+	[ "$(realpath ${DISTFILES_CACHE})" != \
+		"$(realpath -q ${portsdir}/distfiles)" ] || err 1 \
+		"DISTFILES_CACHE cannot be in the portsdir as the portsdir will be mounted read-only"
+
+	mkdir -p ${POUDRIERE_DATA}/packages/${MASTERNAME}/All
+	[ -d "${CCACHE_DIR:-/nonexistent}" ] &&
+		${NULLMOUNT} ${CCACHE_DIR} ${mnt}/ccache
+	[ -n "${MFSSIZE}" ] && mdmfs -M -S -o async -s ${MFSSIZE} md ${mnt}/wrkdirs
+	[ ${TMPFS_WRKDIR} -eq 1 ] && mount -t tmpfs tmpfs ${mnt}/wrkdirs
+	# Only show mounting messages once, not for every builder
+	if [ ${mnt##*/} = "ref" ]; then
+		[ -d "${CCACHE_DIR:-/nonexistent}" ] &&
+			msg "Mounting ccache from: ${CCACHE_DIR}"
+		msg "Mounting packages from: ${POUDRIERE_DATA}/packages/${MASTERNAME}"
+	fi
+
+	${NULLMOUNT} -o ro ${portsdir} ${mnt}${PORTSRC} ||
+		err 1 "Failed to mount the ports directory "
+	mount_packages -o ro
+	${NULLMOUNT} ${DISTFILES_CACHE} ${mnt}/distfiles ||
+		err 1 "Failed to mount the distfiles cache directory"
+
+	optionsdir="${MASTERNAME}"
+	[ -n "${setname}" ] && optionsdir="${optionsdir} ${jname}-${setname}"
+	optionsdir="${optionsdir} ${jname}-${ptname} ${setname} ${ptname} ${jname} -"
+
+	for opt in ${optionsdir}; do
+		use_options ${mnt} ${opt} && break || continue
+	done
+
+	return 0
+}
+
+createfs() {
+	[ $# -ne 3 ] && eargs name mnt fs
+	local name mnt fs
+	name=$1
+	mnt=$(echo $2 | sed -e "s,//,/,g")
+	fs=$3
+
+	if [ -n "${fs}" -a "${fs}" != "none" ]; then
+		msg_n "Creating ${name} fs..."
+		zfs create -p \
+			-o mountpoint=${mnt} ${fs} || err 1 " fail"
+		echo " done"
+	else
+		mkdir -p ${mnt}
+	fi
+}
+
+rollbackfs() {
+	[ $# -ne 2 ] && eargs name mnt
+	local name=$1
+	local mnt=$2
+	local fs=$(zfs_getfs ${mnt})
+
+	if [ -n "${fs}" ]; then
+		zfs rollback -r ${fs}@${name}  || err 1 "Unable to rollback ${fs}"
+		return
+	fi
+
+	mtree -X ${mnt}/poudriere/mtree.${name}exclude \
+	-xr -f ${mnt}/poudriere/mtree.${name} -p ${mnt} | \
+	while read l ; do
+		case "$l" in
+		*extra*Directory*) rm -rf ${mnt}/${l%% *} 2>/dev/null ;;
+		*changed|*missing) echo ${MASTERMNT}/${l% *} ;;
+		esac
+	done | pax -rw -p p -s ",${MASTERMNT},,g" ${mnt}
+}
+
+umountfs() {
+	[ $# -lt 1 ] && eargs mnt childonly
+	local mnt=$1
+	local childonly=$2
+	local pattern
+
+	[ -n "${childonly}" ] && pattern="/"
+
+	[ -d "${mnt}" ] || return 0
+	mnt=$(realpath ${mnt})
+	mount | sort -r -k 2 | while read dev on pt opts; do
+		case ${pt} in
+		${mnt}${pattern}*)
+			umount -f ${pt} || :
+			[ "${dev#/dev/md*}" != "${dev}" ] && mdconfig -d -u ${dev#/dev/md*}
+		;;
+		esac
+	done
+
+	return 0
+}
+
+zfs_getfs() {
+	[ $# -ne 1 ] && eargs mnt
+	local mnt=$(realpath $1)
+	mount -t zfs | awk -v n="${mnt}" ' $3 == n { print $1 }'
+}
+
+clonefs() {
+	[ $# -lt 2 ] && eargs from to snap
+	local from=$1
+	local to=$2
+	local snap=$3
+	local name zfs_to
+	local fs=$(zfs_getfs ${from})
+
+	[ -d ${to} ] && destroyfs ${to} jail
+	mkdir -p ${to}
+	to=$(realpath ${to})
+	[ ${TMPFS_ALL} -eq 1 ] && unset fs
+	if [ -n "${fs}" ]; then
+		name=${to##*/}
+
+		if [ "${name}" = "ref" ]; then
+			zfs_to=${fs%/*}/${MASTERNAME}-${name}
+		else
+			zfs_to=${fs}/${name}
+		fi
+
+		# Make sure the fs is clean before cloning
+		zfs rollback -R ${fs}@${snap} 2>/dev/null || :
+		zfs clone -o mountpoint=${to} \
+			-o sync=disabled \
+			-o atime=off \
+			-o compression=off \
+			${fs}@${snap} \
+			${zfs_to}
+	else
+		[ ${TMPFS_ALL} -eq 1 ] && mount -t tmpfs tmpfs ${to}
+		pax -X -rw -p p -s ",${from},,g" ${from} ${to}
+	fi
+}
+
+destroyfs() {
+	[ $# -ne 2 ] && eargs name type
+	local mnt fs type
+	mnt=$1
+	type=$2
+	[ -d ${mnt} ] || return 0
+	mnt=$(realpath ${mnt})
+	fs=$(zfs_getfs ${mnt})
+	umountfs ${mnt} 1
+	if [ ${TMPFS_ALL} -eq 1 ]; then
+		umount -f ${mnt} 2>/dev/null || :
+	elif [ -n "${fs}" -a "${fs}" != "none" ]; then
+		zfs destroy -rf ${fs}
+		rmdir ${mnt}
+	else
+		chflags -R noschg ${mnt}
+		rm -rf ${mnt}
+	fi
+}
+
+cleanup() {
+	[ -n "${CLEANED_UP}" ] && return 0
+	# Prevent recursive cleanup on error
+	if [ -n "${CLEANING_UP}" ]; then
+		echo "Failure cleaning up. Giving up." >&2
+		return
+	fi
+	export CLEANING_UP=1
+	msg "Cleaning up"
+
+	# If this is a builder, don't cleanup, the master will handle that.
+	if [ -n "${MY_JOBID}" ]; then
+		[ -n "${PKGNAME}" ] && clean_pool ${PKGNAME} 1 || :
+		return 0
+	fi
+
+	[ -n "${MASTERNAME}" ] && rm -rf \
+		${POUDRIERE_DATA}/packages/${MASTERNAME}/.new_packages
+
+	# Only bother with this if using jails as this may be being ran
+	# from queue.sh or daemon.sh, etc.
+	if [ -n "${MASTERMNT}" -a -n "${MASTERNAME}" ]; then
+		if [ -d ${MASTERMNT}/poudriere/var/run ]; then
+			for pid in ${MASTERMNT}/poudriere/var/run/*.pid; do
+				# Ensure there is a pidfile to read or break
+				[ "${pid}" = "${MASTERMNT}/poudriere/var/run/*.pid" ] && break
+				pkill -15 -F ${pid} >/dev/null 2>&1 || :
+			done
+		fi
+		wait
+
+		jail_stop
+	fi
+
+	export CLEANED_UP=1
+}
+
+#Converting portstree if any
+if [ ! -d ${POUDRIERED}/ports ]; then
+	mkdir -p ${POUDRIERED}/ports
+	[ -z "${NO_ZFS}" ] && zfs list -t filesystem -H \
+		-o ${NS}:type,${NS}:name,${NS}:method,mountpoint,name | \
+		grep "^ports" | \
+		while read t name method mnt fs; do
+			msg "Converting the ${name} ports tree"
+			pset ${name} method ${method}
+			pset ${name} mnt ${mnt}
+			pset ${name} fs ${fs}
+			# Delete the old properties
+			zfs inherit -r ${NS}:type ${fs}
+			zfs inherit -r ${NS}:name ${fs}
+			zfs inherit -r ${NS}:method ${fs}
+		done
+	if [ -f ${POUDRIERED}/portstrees ]; then
+		while read name method mnt; do
+			msg "Converting the ${name} ports tree"
+			mkdir ${POUDRIERED}/ports/${name}
+			echo ${method} > ${POUDRIERED}/ports/${name}/method
+			echo ${mnt} > ${POUDRIERED}/ports/${name}/mnt
+		done < ${POUDRIERED}/portstrees
+		rm -f ${POUDRIERED}/portstrees
+	fi
+fi
+
+#Converting jails if any
+if [ ! -d ${POUDRIERED}/jails ]; then
+	mkdir -p ${POUDRIERED}/jails
+	[ -z "${NO_ZFS}" ] && zfs list -t filesystem -H \
+		-o ${NS}:type,${NS}:name,${NS}:version,${NS}:arch,${NS}:method,mountpoint,name | \
+		grep "^rootfs" | \
+		while read t name version arch method mnt fs; do
+			msg "Converting the ${name} jail"
+			jset ${name} version ${version}
+			jset ${name} arch ${arch}
+			jset ${name} method ${method}
+			jset ${name} mnt ${mnt}
+			jset ${name} fs ${fs}
+			# Delete the old properties
+			zfs inherit -r ${NS}:type ${fs}
+			zfs inherit -r ${NS}:name ${fs}
+			zfs inherit -r ${NS}:method ${fs}
+			zfs inherit -r ${NS}:version ${fs}
+			zfs inherit -r ${NS}:arch ${fs}
+			zfs inherit -r ${NS}:stats_built ${fs}
+			zfs inherit -r ${NS}:stats_failed ${fs}
+			zfs inherit -r ${NS}:stats_skipped ${fs}
+			zfs inherit -r ${NS}:stats_ignored ${fs}
+			zfs inherit -r ${NS}:stats_queued ${fs}
+			zfs inherit -r ${NS}:status ${fs}
+		done
+fi
+
+#Converting portstree if any
+if [ ! -d ${POUDRIERED}/ports ]; then
+	mkdir -p ${POUDRIERED}/ports
+	[ -z "${NO_ZFS}" ] && zfs list -t filesystem -H \
+		-o ${NS}:type,${NS}:name,${NS}:method,mountpoint,name | \
+		grep "^ports" | \
+		while read t name method mnt fs; do
+			msg "Converting the ${name} ports tree"
+			pset ${name} method ${method}
+			pset ${name} mnt ${mnt}
+			pset ${name} fs ${fs}
+			# Delete the old properties
+			zfs inherit -r ${NS}:type ${fs}
+			zfs inherit -r ${NS}:name ${fs}
+			zfs inherit -r ${NS}:method ${fs}
+		done
+	if [ -f ${POUDRIERED}/portstrees ]; then
+		while read name method mnt; do
+			[ -z "${name###*}" ] && continue # Skip comments
+			msg "Converting the ${name} ports tree"
+			mkdir ${POUDRIERED}/ports/${name}
+			echo ${method} > ${POUDRIERED}/ports/${name}/method
+			echo ${mnt} > ${POUDRIERED}/ports/${name}/mnt
+		done < ${POUDRIERED}/portstrees
+		rm -f ${POUDRIERED}/portstrees
+	fi
+fi
+
+#Converting jails if any
+if [ ! -d ${POUDRIERED}/jails ]; then
+	mkdir -p ${POUDRIERED}/jails
+	[ -z "${NO_ZFS}" ] && zfs list -t filesystem -H \
+		-o ${NS}:type,${NS}:name,${NS}:version,${NS}:arch,${NS}:method,mountpoint,name | \
+		grep "^rootfs" | \
+		while read t name version arch method mnt fs; do
+			msg "Converting the ${name} jail"
+			jset ${name} version ${version}
+			jset ${name} arch ${arch}
+			jset ${name} method ${method}
+			jset ${name} mnt ${mnt}
+			jset ${name} fs ${fs}
+			# Delete the old properties
+			zfs inherit -r ${NS}:type ${fs}
+			zfs inherit -r ${NS}:name ${fs}
+			zfs inherit -r ${NS}:method ${fs}
+			zfs inherit -r ${NS}:version ${fs}
+			zfs inherit -r ${NS}:arch ${fs}
+			zfs inherit -r ${NS}:stats_built ${fs}
+			zfs inherit -r ${NS}:stats_failed ${fs}
+			zfs inherit -r ${NS}:stats_skipped ${fs}
+			zfs inherit -r ${NS}:stats_ignored ${fs}
+			zfs inherit -r ${NS}:stats_queued ${fs}
+			zfs inherit -r ${NS}:status ${fs}
+		done
+fi
+
+case $IPS in
+01)
+	localipargs="ip6.addr=::1"
+	ipargs="ip6.addr=inherit"
+	;;
+10)
+	localipargs="ip4.addr=127.0.0.1"
+	ipargs="ip4=inherit"
+	;;
+11)
+	localipargs="ip4.addr=127.0.0.1 ip6.addr=::1"
+	ipargs="ip4=inherit ip6=inherit"
+	;;
+esac
+
+for val in ${USE_TMPFS}; do
+	case ${val} in
+	wrkdir|yes) TMPFS_WRKDIR=1 ;;
+	data) TMPFS_DATA=1 ;;
+	all) TMPFS_ALL=1 ;;
+	localbase) TMPFS_LOCALBASE=1 ;;
+	*) err 1 "Unknown value for USE_TMPFS can be a combination of wrkdir,data,all,yes,localbase" ;;
+	esac
+done
+
+case ${TMPFS_WRKDIR}${TMPFS_DATA}${TMPFS_LOCALBASE}${TMPFS_ALL} in
+1**1|*1*1|**11)
+	TMPFS_WRKDIR=0
+	TMPFS_DATA=0
+	TMPFS_LOCALBASE=0
+	;;
+esac

@@ -42,7 +42,8 @@ Options:
     -n          -- No custom prefix
     -p tree     -- Specify the path to the portstree
     -s          -- Skip sanity checks
-    -v          -- Be verbose; show more information. Use twice to enable debug output"
+    -v          -- Be verbose; show more information. Use twice to enable debug output
+    -z          -- Define set name"
 	exit 1
 }
 
@@ -111,15 +112,20 @@ export MASTERNAME
 export MASTERMNT
 export POUDRIERE_BUILD_TYPE=bulk
 
+check_jobs
+
 jail_start ${JAILNAME} ${PTNAME} ${SETNAME}
 
-[ $CONFIGSTR -eq 1 ] && injail env TERM=${SAVED_TERM} make -C /usr/ports/${ORIGIN} config
+[ $CONFIGSTR -eq 1 ] && injail env TERM=${SAVED_TERM} make -C ${PORTSRC}/${ORIGIN} config
 
 LISTPORTS=$(list_deps ${ORIGIN} )
 prepare_ports
 
 markfs prepkg ${MASTERMNT}
 log=$(log_path)
+
+run_hook test_port_start "${JAILNAME}" "${PTNAME}" "${MASTERMNT}${PORTSRC}/${ORIGIN}" \
+	`bget stats_queued`
 
 if ! POUDRIERE_BUILD_TYPE=bulk parallel_build ${JAILNAME} ${PTNAME} ${SETNAME} ; then
 	failed=$(bget ports.failed | awk '{print $1 ":" $3 }' | xargs echo)
@@ -140,16 +146,16 @@ unmarkfs prepkg ${MASTERMNT}
 
 bset status "testing:"
 
-PKGNAME=`injail make -C /usr/ports/${ORIGIN} -VPKGNAME`
-LOCALBASE=`injail make -C /usr/ports/${ORIGIN} -VLOCALBASE`
-: ${PREFIX:=$(injail make -C /usr/ports/${ORIGIN} -VPREFIX)}
+PKGNAME=`injail make -C ${PORTSRC}/${ORIGIN} -VPKGNAME`
+LOCALBASE=`injail make -C ${PORTSRC}/${ORIGIN} -VLOCALBASE`
+: ${PREFIX:=$(injail make -C ${PORTSRC}/${ORIGIN} -VPREFIX)}
 if [ "${USE_PORTLINT}" = "yes" ]; then
 	[ ! -x `which portlint` ] &&
 		err 2 "First install portlint if you want USE_PORTLINT to work as expected"
 	msg "Portlint check"
 	set +e
-	cd ${MASTERMNT}/usr/ports/${ORIGIN} &&
-		PORTSDIR="${MASTERMNT}/usr/ports" portlint -C | \
+	cd ${MASTERMNT}${PORTSRC}/${ORIGIN} &&
+		PORTSDIR="${MASTERMNT}${PORTSRC}" portlint -C | \
 		tee ${log}/logs/${PKGNAME}.portlint.log
 	set -e
 fi
@@ -167,19 +173,25 @@ mkdir -p ${MASTERMNT}/tmp/pkgs
 PORTTESTING=yes
 export DEVELOPER_MODE=yes
 log_start ${log}/logs/${PKGNAME}.log
-buildlog_start /usr/ports/${ORIGIN}
-if ! build_port /usr/ports/${ORIGIN}; then
+buildlog_start ${PORTSRC}/${ORIGIN}
+if ! build_port ${PORTSRC}/${ORIGIN}; then
 	failed_status=$(bget status)
 	failed_phase=${failed_status%:*}
 
-	save_wrkdir ${MASTERMNT} "${PKGNAME}" "/usr/ports/${ORIGIN}" "${failed_phase}" || :
+	save_wrkdir ${MASTERMNT} "${PKGNAME}" "${PORTSRC}/${ORIGIN}" "${failed_phase}" || :
+	build_result=0
+	run_hook port_build_failure "${JAILNAME}" "${PTNAME}" "${MASTERMNT}${PORTSRC}/${ORIGIN}" "${failed_phase}"
 
 	if [ ${INTERACTIVE_MODE} -eq 0 ]; then
-		stop_build /usr/ports/${ORIGIN} ${log}/logs/${PKGNAME}.log
+		stop_build ${PORTSRC}/${ORIGIN} ${log}/logs/${PKGNAME}.log
 		exit 1
 	fi
-elif [ -f ${MASTERMNT}/usr/ports/${ORIGIN}/.keep ]; then
-	save_wrkdir ${MASTERMNT} "${PKGNAME}" "/usr/ports/${ORIGIN}" "noneed" ||:
+else
+	if [ -f ${MASTERMNT}/${PORTSRC}/${ORIGIN}/.keep ]; then
+		save_wrkdir ${MASTERMNT} "${PKGNAME}" "${PORTSRC}/${ORIGIN}" "noneed" ||:
+	fi
+	build_result=1
+	run_hook port_build_success "${JAILNAME}" "${PTNAME}" "${MASTERMNT}${PORTSRC}/${ORIGIN}"
 fi
 
 msg "Installing from package"
@@ -192,38 +204,57 @@ if [ $INTERACTIVE_MODE -gt 0 ]; then
 	msg "Installing run-depends"
 	# Install run-depends since this is an interactive test
 	echo "PACKAGES=/packages" >> ${MASTERMNT}/etc/make.conf
-	injail make -C /usr/ports/${ORIGIN} run-depends ||
+	injail make -C ${PORTSRC}/${ORIGIN} run-depends ||
 		msg "Failed to install RUN_DEPENDS"
 
-	# Enable networking
-	jstop
-	jstart 1
+	if ${BSDPLATFORM} = "freebsd"; then
+		# Enable networking
+		jstop
+		jstart 1
 
-	if [ $INTERACTIVE_MODE -eq 1 ]; then
-		msg "Entering interactive test mode. Type 'exit' when done."
-		injail env -i TERM=${SAVED_TERM} \
-			PACKAGESITE="file:///packages" /usr/bin/login -fp root
-		[ -z "${failed_phase}" ] || err 1 "Build failed in phase: ${failed_phase}"
-	elif [ $INTERACTIVE_MODE -eq 2 ]; then
-		msg "Leaving jail ${MASTERNAME} running, mounted at ${MASTERMNT} for interactive run testing"
-		msg "To enter jail: jexec ${MASTERNAME} /bin/sh"
-		msg "To stop jail: poudriere jail -k -j ${MASTERNAME}"
-		CLEANING_UP=1
-		exit 0
+		if [ $INTERACTIVE_MODE -eq 1 ]; then
+			msg "Entering interactive test mode. Type 'exit' when done."
+			injail env -i TERM=${SAVED_TERM} \
+				PACKAGESITE="file:///packages" /usr/bin/login -fp root
+			[ -z "${failed_phase}" ] || err 1 "Build failed in phase: ${failed_phase}"
+		elif [ $INTERACTIVE_MODE -eq 2 ]; then
+			msg "Leaving jail ${MASTERNAME} running, mounted at ${MASTERMNT} for interactive run testing"
+			msg "To enter jail: jexec ${MASTERNAME} /bin/sh"
+			msg "To stop jail: poudriere jail -k -j ${MASTERNAME}"
+			CLEANING_UP=1
+			exit 0
+		fi
+	else
+		if [ $INTERACTIVE_MODE -eq 1 ]; then
+			msg "Entering interactive test mode. Type 'exit' when done."
+			injail env -i TERM=${SAVED_TERM} \
+				PACKAGESITE="file:///packages" /bin/sh
+			[ -z "${failed_phase}" ] || 
+				err 1 "Build failed in phase: ${failed_phase}"
+		else
+			msg "Leaving jail ${MASTERNAME} running, mounted at ${MASTERMNT} for interactive run testing"
+			msg "To enter jail: chroot ${MASTERMNT} /bin/sh"
+			msg "To stop jail: 'exit', 'poudriere jail -C -j ${MASTERNAME}'"
+			CLEANING_UP=1
+			exit 0
+		fi
 	fi
 	print_phase_footer
 fi
 
 msg "Cleaning up"
-injail make -C /usr/ports/${ORIGIN} clean
+injail make -C ${PORTSRC}/${ORIGIN} clean
 
 msg "Deinstalling package"
 injail ${PKG_DELETE} ${PKGNAME}
 
 msg "Removing existing ${PREFIX} dir"
-stop_build /usr/ports/${ORIGIN} ${log}/logs/${PKGNAME}.log
+stop_build ${PORTSRC}/${ORIGIN} ${log}/logs/${PKGNAME}.log
 
 cleanup
 set +e
+run_hook test_port_ended "${JAILNAME}" "${PTNAME}" "${MASTERMNT}${PORTSRC}/${ORIGIN}" \
+	`bget stats_built` `bget stats_failed` `bget stats_ignored` \
+	`bget stats_skipped` "${build_result}"
 
 exit 0
