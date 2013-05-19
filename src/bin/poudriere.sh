@@ -29,7 +29,7 @@ LC_ALL=C
 unset SHELL
 SAVED_TERM=$TERM
 unset TERM
-POUDRIERE_VERSION="3.0-pre"
+POUDRIERE_VERSION="3.1-pre"
 
 usage() {
 	echo "Usage: poudriere command [options]
@@ -41,8 +41,9 @@ Commands:
     help        -- show usage
     jail        -- manage the jails used by poudriere
     ports       -- create, update or delete the portstrees used by poudriere
-    options     -- Configure ports options
+    options     -- configure ports options
     queue       -- queue a build request
+    status      -- get status of builds
     testport    -- launch a test on a given port
     version     -- show poudriere version"
 	exit 1
@@ -92,6 +93,9 @@ case ${CMD} in
 		;;
 	options)
 		exec env -i TERM=${SAVED_TERM} PATH=${PATH} POUDRIERE_VERSION="${POUDRIERE_VERSION}" /bin/sh ${SETX} ${POUDRIEREPREFIX}/options.sh $@
+		;;
+	status)
+		exec env -i PATH=${PATH} POUDRIERE_VERSION="${POUDRIERE_VERSION}" /bin/sh ${SETX} ${POUDRIEREPREFIX}/status.sh $@
 		;;
 	help)
 		usage

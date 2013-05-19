@@ -142,7 +142,7 @@ while getopts "B:f:j:J:Ccp:RFtTsvwz:ar" FLAG; do
 			CLEAN_LISTED=1
 			;;
 		f)
-			LISTPKGS=${OPTARG}
+			LISTPKGS="${LISTPKGS} ${OPTARG}"
 			;;
 		F)
 			export MASTER_SITE_BACKUP=''
@@ -207,7 +207,11 @@ fi
 
 if [ $# -eq 0 ]; then
 	[ -n "${LISTPKGS}" -o ${ALL} -eq 1 ] || err 1 "No packages specified"
-	[ ${ALL} -eq 1 -o -f "${LISTPKGS}" ] || err 1 "No such list of packages: ${LISTPKGS}"
+	if [ ${ALL} -eq 0 ]; then
+		for listpkg_name in ${LISTPKGS}; do
+			[ -f "${listpkg_name}" ] || err 1 "No such list of packages: ${listpkg_name}"
+		done
+	fi
 else
 	[ ${ALL} -eq 0 ] || err 1 "command line arguments and -a cannot be used at the same time"
 	[ -z "${LISTPKGS}" ] || err 1 "command line arguments and list of ports cannot be used at the same time"
@@ -231,14 +235,6 @@ prepare_ports
 run_hook bulk_build_start "${JAILNAME}" "${PTNAME}" `bget stats_queued`
 
 bset status "building:"
-
-[ -z "${PORTTESTING}" -a -z "${ALLOW_MAKE_JOBS}" ] &&
-	echo "DISABLE_MAKE_JOBS=yes" >> ${MASTERMNT}/etc/make.conf
-
-[ -n "${JOBS_LIMIT}" ] &&
-	echo "MAKE_JOBS_NUMBER=${JOBS_LIMIT}" >> ${MASTERMNT}/etc/make.conf
-
-markfs prepkg ${MASTERMNT}
 
 parallel_build ${JAILNAME} ${PTNAME} ${SETNAME} || : # Ignore errors as they are handled below
 
@@ -264,7 +260,7 @@ if [ $nbbuilt -eq 0 ]; then
 		msg "No package built, no need to update INDEX"
 	fi
 else
-	[ -n "${NO_RESTRICTED}" ] && clean_restricted
+	[ "${NO_RESTRICTED:-no}" != "no" ] && clean_restricted
 	[ ${BUILD_REPO} -eq 1 ] && build_repo
 fi
 
@@ -290,6 +286,7 @@ if [ $nbskipped -gt 0 ]; then
 	echo ""
 fi
 msg "[${MASTERNAME}] $nbbuilt packages built, $nbfailed failures, $nbignored ignored, $nbskipped skipped"
+show_log_info
 
 set +e
 run_hook bulk_build_ended "${JAILNAME}" "${PTNAME}" "${nbbuilt}" \

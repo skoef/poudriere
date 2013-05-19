@@ -6,8 +6,7 @@ delete_jail() {
 	test -z ${JAILNAME} && usage
 	jail_exists ${JAILNAME} || err 1 "No such jail: ${JAILNAME}"
 	jail_runs ${JAILNAME} &&
-		err 1 "Unable to remove jail ${JAILNAME}: it is running"
-
+		err 1 "Unable to delete jail ${JAILNAME}: it is running"
 	msg_n "Removing ${JAILNAME} jail..."
 	destroyfs ${JAILMNT} jail
 	rm -rf ${POUDRIERED}/jails/${JAILNAME} || :
@@ -21,7 +20,7 @@ update_version() {
 	osversion=`awk '/\#define __DragonFly_version/ { print $3 }' ${JAILMNT}/usr/include/sys/param.h`
 	login_env=",UNAME_r=${release},UNAME_v=DragonFly ${release},OSVERSION=${osversion}"
 
-	sed -i "" -e "s/:\(setenv.*\):/:\1${login_env}:/" ${JAILMNT}/etc/login.conf
+	sed -i "" -e "s/,UNAME_r.*:/:/ ; s/:\(setenv.*\):/:\1${login_env}:/" ${JAILMNT}/etc/login.conf
 	cap_mkdb ${JAILMNT}/etc/login.conf
 }
 

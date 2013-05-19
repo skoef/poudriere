@@ -1,7 +1,5 @@
 #!/bin/sh
 # 
-# Copyright (c) 2012, Natacha Porté
-# Copyright (c) 2013 Baptiste Daroussin <bapt@FreeBSD.org>
 # Copyright (c) 2013 Bryan Drewery <bdrewery@FreeBSD.org>
 # All rights reserved.
 # 
@@ -27,20 +25,11 @@
 # SUCH DAMAGE.
 
 usage() {
-	echo "poudriere options [options] [-f file|cat/port ...]
-
-Parameters:
-    -f file     -- Give the list of ports to set options
-    [ports...]  -- List of ports to set options on
+	echo "poudriere status [options]
 
 Options:
-    -c          -- Use 'make config' target
-    -C          -- Use 'make config-conditional' target (default)
     -j name     -- Run on the given jail
     -p tree     -- Specify on which ports tree the configuration will be done
-    -n          -- Don't configure/show/remove options of dependencies
-    -r          -- Remove port options instead of configuring them
-    -s          -- Show port options instead of configuring them
     -z set      -- Specify which SET to use"
 
 	exit 1
@@ -51,42 +40,17 @@ SCRIPTPREFIX=`dirname ${SCRIPTPATH}`
 
 PTNAME=default
 SETNAME=""
-DO_RECURSE=y
-COMMAND=config-conditional
-RECURSE_COMMAND=config-recursive
 
 . ${SCRIPTPREFIX}/common.sh
 
-[ $# -eq 0 ] && usage
-
-while getopts "cCj:f:p:nrsz:" FLAG; do
+while getopts "j:p:z:" FLAG; do
 	case "${FLAG}" in
-		c)
-			COMMAND=config
-			;;
-		C)
-			COMMAND=config-conditional
-			;;
 		j)
 			jail_exists ${OPTARG} || err 1 "No such jail"
 			JAILNAME=${OPTARG}
 			;;
-		f)
-			BULK_LIST=${OPTARG}
-			;;
 		p)
 			PTNAME=${OPTARG}
-			;;
-		n)
-			DO_RECURSE=
-			;;
-		r)
-			COMMAND=rmconfig
-			RECURSE_COMMAND=rmconfig-recursive
-			;;
-		s)
-			COMMAND=showconfig
-			RECURSE_COMMAND=showconfig-recursive
 			;;
 		z)
 			[ -n "${OPTARG}" ] || err 1 "Empty set name"
@@ -100,33 +64,37 @@ done
 
 shift $((OPTIND-1))
 
-export PORTSDIR=`pget ${PTNAME} mnt`
-[ -d "${PORTSDIR}/ports" ] && PORTSDIR="${PORTSDIR}/ports"
-[ -z "${PORTSDIR}" ] && err 1 "No such ports tree: ${PTNAME}"
-
-if [ $# -eq 0 ]; then
-	[ -n "${BULK_LIST}" ] || err 1 "No packages specified"
-	[ -f ${BULK_LIST} ] || err 1 "No such list of packages: ${BULK_LIST}"
-LISTPORTS=`grep -v -E '(^[[:space:]]*#|^[[:space:]]*$)' ${BULK_LIST}`
-else
-	[ -z "${BULK_LIST}" ] ||
-		err 1 "command line arguments and list of ports cannot be used at the same time"
-	LISTPORTS="$@"
+if [ ${POUDRIERE_DATA}/build/*/ref = "${POUDRIERE_DATA}/build/*/ref" ]; then
+	msg "No running builds"
+	exit 0
 fi
 
-PORT_DBDIR=${SCRIPTPREFIX}/../../etc/poudriere.d/${JAILNAME}${JAILNAME:+-}${SETNAME}${SETNAME:+-}options
+BUILDNAME=latest
+POUDRIERE_BUILD_TYPE=bulk
 
-mkdir -p ${PORT_DBDIR}
+if [ -n "${JAILNAME}" ]; then
+	mastername=${JAILNAME}-${PTNAME}${SETNAME:+-${SETNAME}}
+	mastermnt=${POUDRIERE_DATA}/build/${mastername}/ref
+	jail_runs ${mastername} || err 1 "No such jail running"
+	builders="$(MASTERNAME=$mastername bget builders 2>/dev/null || :)"
+	MASTERNAME=$mastername MASTERMNT=$mastermnt \
+		JOBS="${builders}" siginfo_handler
+else
+	format="%-20s %-25s %6s %5s %6s %7s %7s %s\n"
+	printf "${format}" "JAIL" "STATUS" "QUEUED" "BUILT" "FAILED" "SKIPPED" \
+		"IGNORED"
+	for mastermnt in ${POUDRIERE_DATA}/build/*/ref; do
+		[ "${mastermnt}" = "${POUDRIERE_DATA}/build/*/ref" ] && break
+		mastername=${mastermnt#${POUDRIERE_DATA}/build/}
+		mastername=${mastername%/ref}
 
-for origin in ${LISTPORTS}; do
-	[ -d ${PORTSDIR}/${origin} ] || err 1 "No such ports ${origin}"
-	make PORT_DBDIR=${PORT_DBDIR} \
-		-C ${PORTSDIR}/${origin} \
-		${COMMAND}
-
-	if [ -n "${DO_RECURSE}" ]; then
-		make PORT_DBDIR=${PORT_DBDIR} \
-			-C ${PORTSDIR}/${origin} \
-			${RECURSE_COMMAND}
-	fi
-done
+		status=$(MASTERNAME=$mastername bget status 2>/dev/null || :)
+		nbqueued=$(MASTERNAME=$mastername bget stats_queued 2>/dev/null || :)
+		nbfailed=$(MASTERNAME=$mastername bget stats_failed 2>/dev/null || :)
+		nbignored=$(MASTERNAME=$mastername bget stats_ignored 2>/dev/null || :)
+		nbskipped=$(MASTERNAME=$mastername bget stats_skipped 2>/dev/null || :)
+		nbbuilt=$(MASTERNAME=$mastername bget stats_built 2>/dev/null || :)
+		printf "${format}" "${mastername}" "${status}" "${nbqueued}" \
+			"${nbbuilt}" "${nbfailed}" "${nbskipped}" "${nbignored}"
+	done
+fi

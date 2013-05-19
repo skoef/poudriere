@@ -43,7 +43,7 @@ Options:
     -p tree     -- Specify the path to the portstree
     -s          -- Skip sanity checks
     -v          -- Be verbose; show more information. Use twice to enable debug output
-    -z          -- Define set name"
+    -z set      -- Specify which SET to use"
 	exit 1
 }
 
@@ -121,7 +121,6 @@ jail_start ${JAILNAME} ${PTNAME} ${SETNAME}
 LISTPORTS=$(list_deps ${ORIGIN} )
 prepare_ports
 
-markfs prepkg ${MASTERMNT}
 log=$(log_path)
 
 run_hook test_port_start "${JAILNAME}" "${PTNAME}" "${MASTERMNT}${PORTSRC}/${ORIGIN}" \
@@ -142,7 +141,6 @@ if ! POUDRIERE_BUILD_TYPE=bulk parallel_build ${JAILNAME} ${PTNAME} ${SETNAME} ;
 	exit 1
 fi
 
-unmarkfs prepkg ${MASTERMNT}
 
 bset status "testing:"
 
@@ -160,7 +158,7 @@ if [ "${USE_PORTLINT}" = "yes" ]; then
 	set -e
 fi
 [ ${NOPREFIX} -ne 1 ] && PREFIX="${BUILDROOT:-/prefix}/`echo ${PKGNAME} | tr '[,+]' _`"
-PORT_FLAGS="NO_DEPENDS=yes PREFIX=${PREFIX}"
+PORT_FLAGS="PREFIX=${PREFIX}"
 msg "Building with flags: ${PORT_FLAGS}"
 
 if [ -d ${MASTERMNT}${PREFIX} ]; then
@@ -172,7 +170,7 @@ PKGENV="PACKAGES=/tmp/pkgs PKGREPOSITORY=/tmp/pkgs"
 mkdir -p ${MASTERMNT}/tmp/pkgs
 PORTTESTING=yes
 export DEVELOPER_MODE=yes
-log_start ${log}/logs/${PKGNAME}.log
+log_start
 buildlog_start ${PORTSRC}/${ORIGIN}
 if ! build_port ${PORTSRC}/${ORIGIN}; then
 	failed_status=$(bget status)
@@ -183,7 +181,7 @@ if ! build_port ${PORTSRC}/${ORIGIN}; then
 	run_hook port_build_failure "${JAILNAME}" "${PTNAME}" "${MASTERMNT}${PORTSRC}/${ORIGIN}" "${failed_phase}"
 
 	if [ ${INTERACTIVE_MODE} -eq 0 ]; then
-		stop_build ${PORTSRC}/${ORIGIN} ${log}/logs/${PKGNAME}.log
+		stop_build ${PORTSRC}/${ORIGIN}
 		exit 1
 	fi
 else
@@ -201,9 +199,14 @@ injail ${PKG_ADD} /tmp/pkgs/${PKGNAME}.${PKG_EXT}
 if [ $INTERACTIVE_MODE -gt 0 ]; then
 	print_phase_header "Interactive"
 
+	# Stop the tee process and stop redirecting stdout so that
+	# the terminal can be properly used in the jail
+	log_stop
+
 	msg "Installing run-depends"
 	# Install run-depends since this is an interactive test
 	echo "PACKAGES=/packages" >> ${MASTERMNT}/etc/make.conf
+	echo "127.0.0.1 ${MASTERNAME}" >> ${MASTERMNT}/etc/hosts
 	injail make -C ${PORTSRC}/${ORIGIN} run-depends ||
 		msg "Failed to install RUN_DEPENDS"
 
@@ -249,7 +252,7 @@ msg "Deinstalling package"
 injail ${PKG_DELETE} ${PKGNAME}
 
 msg "Removing existing ${PREFIX} dir"
-stop_build ${PORTSRC}/${ORIGIN} ${log}/logs/${PKGNAME}.log
+stop_build ${PORTSRC}/${ORIGIN}
 
 cleanup
 set +e
