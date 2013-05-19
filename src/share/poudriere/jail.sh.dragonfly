@@ -24,35 +24,6 @@ update_version() {
 	cap_mkdb ${JAILMNT}/etc/login.conf
 }
 
-establish_jail() {
-# REMOVE THIS.
-	[ $# -ne 5 ] && eargs name version arch mountpoint filesys
-	local name=$1
-	local version=$2
-	local arch=$3
-	local mnt=$( echo $4 | sed -e "s,//,/,g")
-	local filesys=$5
-	local confdir="${POUDRIERE_DATA}/meta/jail/${name}"
-	local memdir="${BASEFS}/memory/${name}"
-	local numcpu=$(sysctl -n hw.ncpu)
-	local JOBX="$(jot -w %02d ${numcpu})"
-	msg_n "Creating ${name} fs..."
-
-	mkdir -p ${mnt}
-	mkdir -p ${confdir}
-	mkdir -p ${memdir}
-	mkdir -p ${filesys}
-
-	echo "rootfs"     > ${confdir}/type
-	echo "${name}"    > ${confdir}/name
-	echo "${version}" > ${confdir}/version
-	echo "${arch}"    > ${confdir}/arch
-	echo "${mnt}"     > ${confdir}/mountpoint
-	echo "${filesys}" > ${confdir}/filesys
-	echo "${numcpu}"  > ${confdir}/slaves
-	echo " done"
-}
-
 update_jail() {
 	# DragonFly expects 1 argument (quick), FreeBSD doesn't
 	jail_exists ${JAILNAME} || err 1 "No such jail: ${JAILNAME}"
@@ -241,6 +212,7 @@ EOF
 	mkdir -p ${JAILMNT}/${PORTSRC}
 	mkdir -p ${JAILMNT}/${STD_PACKAGES}
 	mkdir -p ${JAILMNT}/${STD_DISTFILES}
+	mkdir -p ${JAILMNT}/ccache
 	mkdir -p ${JAILMNT}/wrkdirs
 	mkdir -p ${JAILMNT}/var/db/pkg
 	mkdir -p ${POUDRIERE_DATA}/logs
