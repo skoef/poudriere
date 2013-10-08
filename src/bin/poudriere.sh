@@ -32,26 +32,36 @@ unset TERM
 POUDRIERE_VERSION="3.1-pre"
 
 usage() {
-	echo "Usage: poudriere command [options]
+	cat << EOF
+Usage: poudriere [-e etcdir] command [options]
 
 Commands:
-    bulk        -- generate packages for given ports
-    distclean   -- clean old distfiles
-    daemon      -- launch the poudriere daemon
-    help        -- show usage
-    jail        -- manage the jails used by poudriere
-    ports       -- create, update or delete the portstrees used by poudriere
-    options     -- configure ports options
-    queue       -- queue a build request
-    status      -- get status of builds
-    testport    -- launch a test on a given port
-    version     -- show poudriere version"
+    bulk        -- Generate packages for given ports
+    distclean   -- Remove old distfiles
+    daemon      -- Launch the poudriere daemon
+    help        -- Show usage
+    jail        -- Manage the jails used by poudriere
+    ports       -- Create, update or delete the portstrees used by poudriere
+    pkgclean    -- Remove packages that are no longer needed
+    options     -- Configure ports options
+    queue       -- Queue a build request
+    status      -- Get the status of builds
+    testport    -- Launch a test build of a given port
+    version     -- Show the version of poudriere
+EOF
 	exit 1
 }
 
 SETX=""
-while getopts "x" FLAG; do
+while getopts "e:x" FLAG; do
         case "${FLAG}" in
+		e)
+			if [ ! -d "$OPTARG" ]; then
+				echo "Error: argument '$OPTARG' not a directory"
+				exit 1
+			fi
+			export POUDRIERE_ETC=$OPTARG
+			;;
                 x)
                         SETX="-x"
                         ;;
@@ -71,43 +81,32 @@ POUDRIEREPREFIX=${POUDRIEREPREFIX}/share/poudriere
 
 CMD=$1
 shift
+CMD_ENV="PATH=${PATH} POUDRIERE_VERSION=${POUDRIERE_VERSION}"
+[ -n "${POUDRIERE_ETC}" ] && CMD_ENV="${CMD_ENV} POUDRIERE_ETC=${POUDRIERE_ETC}"
 
-case ${CMD} in
-	jail|jails)
-		exec env -i PATH=${PATH} POUDRIERE_VERSION="${POUDRIERE_VERSION}" /bin/sh ${SETX} ${POUDRIEREPREFIX}/jail.sh $@
-		;;
-	testport)
-		exec env -i PATH=${PATH} POUDRIERE_VERSION="${POUDRIERE_VERSION}" SAVED_TERM=${SAVED_TERM} /bin/sh ${SETX} ${POUDRIEREPREFIX}/testport.sh $@
-		;;
-	bulk)
-		exec env -i PATH=${PATH} POUDRIERE_VERSION="${POUDRIERE_VERSION}" /bin/sh ${SETX} ${POUDRIEREPREFIX}/bulk.sh $@
-		;;
-	distclean)
-		exec env -i PATH=${PATH} POUDRIERE_VERSION="${POUDRIERE_VERSION}" /bin/sh ${SETX} ${POUDRIEREPREFIX}/distclean.sh $@
-		;;
-	ports)
-		exec env -i PATH=${PATH} POUDRIERE_VERSION="${POUDRIERE_VERSION}" /bin/sh ${SETX} ${POUDRIEREPREFIX}/ports.sh $@
-		;;
-	queue)
-		exec env -i PATH=${PATH} POUDRIERE_VERSION="${POUDRIERE_VERSION}" /bin/sh ${SETX} ${POUDRIEREPREFIX}/queue.sh $@
-		;;
-	options)
-		exec env -i TERM=${SAVED_TERM} PATH=${PATH} POUDRIERE_VERSION="${POUDRIERE_VERSION}" /bin/sh ${SETX} ${POUDRIEREPREFIX}/options.sh $@
-		;;
-	status)
-		exec env -i PATH=${PATH} POUDRIERE_VERSION="${POUDRIERE_VERSION}" /bin/sh ${SETX} ${POUDRIEREPREFIX}/status.sh $@
+# Handle special-case commands first.
+case "${CMD}" in
+	version)
+		echo "${POUDRIERE_VERSION}"
+		exit 0
 		;;
 	help)
 		usage
 		;;
-	version)
-		echo "${POUDRIERE_VERSION}"
+	jails)
+		CMD="jail"
 		;;
-	daemon)
-		exec env -i PATH=${PATH} POUDRIERE_VERSION="${POUDRIERE_VERSION}" /bin/sh ${SETX} ${POUDRIEREPREFIX}/daemon.sh $@
+	options|testport)
+		CMD_ENV="${CMD_ENV} SAVED_TERM=${SAVED_TERM}"
+esac
+
+case "${CMD}" in
+	bulk|distclean|daemon|jail|ports|options|pkgclean|queue|status|testport)
 		;;
 	*)
-		echo "Unknown command ${CMD}"
+		echo "Unknown command '${CMD}'"
 		usage
 		;;
 esac
+
+exec env -i ${CMD_ENV} /bin/sh ${SETX} "${POUDRIEREPREFIX}/${CMD}.sh" $@

@@ -27,87 +27,36 @@
 set -e
 
 usage() {
-	echo "poudriere bulk [options] [-f file|cat/port ...]
+	cat << EOF
+poudriere bulk [options] [-f file|cat/port ...]
 
 Parameters:
+    -a          -- Build the whole ports tree
     -f file     -- Get the list of ports to build from a file
     [ports...]  -- List of ports to build on the command line
 
 Options:
-    -B name     -- What buildname to use (must be unique, defaults to YYYY-MM-DD_HH:MM:SS)
+    -B name     -- What buildname to use (must be unique, defaults to
+                   YYYY-MM-DD_HH:MM:SS)
     -c          -- Clean all the previously built binary packages
-    -C          -- Clean previously built packages from the given list to build
+    -C          -- Clean only the packages listed on the command line or
+                   -f file
     -R          -- Clean RESTRICTED packages after building
-    -t          -- Add some tests to the package build
+    -t          -- Test the specified ports for leftovers
+    -r          -- Resursively test all dependencies as well
     -T          -- Try to build broken ports anyway
     -F          -- Only fetch from orignial master_site (skip FreeBSD mirrors)
     -s          -- Skip sanity checks
-    -J n        -- Run n jobs in parallel (Default: to 8)
+    -J n        -- Run n jobs in parallel (Defaults to the number of CPUs)
     -j name     -- Run only on the given jail
+    -N          -- Build package repository when build is complete
     -p tree     -- Specify on which ports tree the bulk build will be done
-    -r          -- Execute pkg repo command when bulk completes
-    -v          -- Be verbose; show more information. Use twice to enable debug output
+    -v          -- Be verbose; show more information. Use twice to enable
+                   debug output
     -w          -- Save WRKDIR on failed builds
     -z set      -- Specify which SET to use
-    -a          -- Build the whole ports tree"
-
+EOF
 	exit 1
-}
-
-clean_restricted() {
-	msg "Cleaning restricted packages"
-	bset status "clean_restricted:"
-	# Remount rw
-	# mount_nullfs does not support mount -u
-	umount ${MASTERMNT}/packages
-	mount_packages
-	injail make -C ${PORTSRC} -j ${PARALLEL_JOBS} clean-restricted >/dev/null
-	# Remount ro
-	umount ${MASTERMNT}/packages
-	mount_packages -o ro
-}
-
-build_repo() {
-	if [ $PKGNG -eq 1 ]; then
-		msg "Creating pkgng repository"
-		bset status "pkgrepo:"
-		tar xf ${MASTERMNT}/packages/Latest/pkg.txz -C ${MASTERMNT} \
-			-s ",/.*/,poudriere/,g" "*/pkg-static"
-		rm -f ${POUDRIERE_DATA}/packages/${MASTERNAME}/repo.txz \
-			${POUDRIERE_DATA}/packages/${MASTERNAME}/repo.sqlite
-		if [ -n "${PKG_REPO_SIGNING_KEY}" -a \
-			-f "${PKG_REPO_SIGNING_KEY}" ]; then
-			${MASTERMNT}/poudriere/pkg-static repo \
-				${POUDRIERE_DATA}/packages/${MASTERNAME}/ ${PKG_REPO_SIGNING_KEY}
-		else
-			${MASTERMNT}/poudriere/pkg-static repo \
-				${POUDRIERE_DATA}/packages/${MASTERNAME}/
-		fi
-	else
-		msg "Preparing INDEX"
-		bset status "index:"
-		OSMAJ=`injail uname -r | awk -F. '{ print $1 }'`
-		INDEXF=${POUDRIERE_DATA}/packages/${MASTERNAME}/INDEX-${OSMAJ}
-		rm -f ${INDEXF}.1 2>/dev/null || :
-		for pkg_file in ${POUDRIERE_DATA}/packages/${MASTERNAME}/All/*.tbz; do
-			# Check for non-empty directory with no packages in it
-			[ "${pkg}" = "${POUDRIERE_DATA}/packages/${MASTERNAME}/All/*.tbz" ] && break
-			msg_verbose "Extracting description for ${ORIGIN} ..."
-			ORIGIN=$(pkg_get_origin ${pkg_file})
-			[ -d ${MASTERMNT}${PORTSRC}/${ORIGIN} ] &&
-				injail make -C ${PORTSRC}/${ORIGIN} describe >> ${INDEXF}.1
-		done
-
-		msg_n "Generating INDEX..."
-		make_index ${INDEXF}.1 ${INDEXF}
-		echo " done"
-
-		rm ${INDEXF}.1
-		[ -f ${INDEXF}.bz2 ] && rm ${INDEXF}.bz2
-		msg_n "Compressing INDEX-${OSMAJ}..."
-		bzip2 -9 ${INDEXF}
-		echo " done"
-	fi
 }
 
 SCRIPTPATH=`realpath $0`
@@ -123,14 +72,17 @@ BUILD_REPO=0
 
 [ $# -eq 0 ] && usage
 
-while getopts "B:f:j:J:Ccp:RFtTsvwz:ar" FLAG; do
+while getopts "B:f:j:J:CcNp:RFtrTsvwz:a" FLAG; do
 	case "${FLAG}" in
 		B)
 			BUILDNAME="${OPTARG}"
 			;;
 		t)
-			export PORTTESTING=1
+			PORTTESTING=1
 			export DEVELOPER_MODE=yes
+			;;
+		r)
+			PORTTESTING_RECURSIVE=1
 			;;
 		T)
 			export TRYBROKEN=yes
@@ -154,10 +106,12 @@ while getopts "B:f:j:J:Ccp:RFtTsvwz:ar" FLAG; do
 		J)
 			PARALLEL_JOBS=${OPTARG}
 			;;
-		r)
+		N)
 			BUILD_REPO=1
 			;;
 		p)
+			porttree_exists ${OPTARG} ||
+			    err 2 "No such ports tree ${OPTARG}"
 			PTNAME=${OPTARG}
 			;;
 		R)
@@ -187,10 +141,6 @@ done
 
 shift $((OPTIND-1))
 
-export SKIPSANITY
-
-STATUS=0 # out of jail #
-
 test -z "${JAILNAME}" && err 1 "Don't know on which jail to run please specify -j"
 
 MASTERNAME=${JAILNAME}-${PTNAME}${SETNAME:+-${SETNAME}}
@@ -201,26 +151,17 @@ export MASTERMNT
 if [ ${CLEAN} -eq 1 ]; then
 	msg_n "Cleaning previous bulks if any..."
 	rm -rf ${POUDRIERE_DATA}/packages/${MASTERNAME}/*
-	rm -rf ${POUDRIERE_DATA}/cache/${JAILNAME}
+	rm -rf ${POUDRIERE_DATA}/cache/${MASTERNAME}
 	echo " done"
-fi
-
-if [ $# -eq 0 ]; then
-	[ -n "${LISTPKGS}" -o ${ALL} -eq 1 ] || err 1 "No packages specified"
-	if [ ${ALL} -eq 0 ]; then
-		for listpkg_name in ${LISTPKGS}; do
-			[ -f "${listpkg_name}" ] || err 1 "No such list of packages: ${listpkg_name}"
-		done
-	fi
-else
-	[ ${ALL} -eq 0 ] || err 1 "command line arguments and -a cannot be used at the same time"
-	[ -z "${LISTPKGS}" ] || err 1 "command line arguments and list of ports cannot be used at the same time"
-	LISTPORTS="$@"
 fi
 
 check_jobs
 
 export POUDRIERE_BUILD_TYPE=bulk
+
+run_hook bulk start
+
+read_packages_from_params "$@"
 
 jail_start ${JAILNAME} ${PTNAME} ${SETNAME}
 
@@ -236,7 +177,7 @@ run_hook bulk_build_start "${JAILNAME}" "${PTNAME}" `bget stats_queued`
 
 bset status "building:"
 
-parallel_build ${JAILNAME} ${PTNAME} ${SETNAME} || : # Ignore errors as they are handled below
+parallel_build ${JAILNAME} ${PTNAME} ${SETNAME}
 
 bset status "done:"
 
@@ -252,17 +193,26 @@ nbbuilt=$(bget stats_built)
 [ "$nbignored" = "-" ] && nbignored=0
 [ "$nbskipped" = "-" ] && nbskipped=0
 [ "$nbbuilt" = "-" ] && nbbuilt=0
-# Package all newly build ports
-if [ $nbbuilt -eq 0 ]; then
+# Always create repository if it is missing (but still respect -T)
+if [ $PKGNG -eq 1 ] && \
+	[ ! -f ${MASTERMNT}/packages/digests.txz -o \
+	  ! -f ${MASTERMNT}/packages/repo.txz ]; then
+	[ $nbbuilt -eq 0 -a ${BUILD_REPO} -eq 1 ] && 
+		msg "No package built, but repository needs to be created"
+	# This block mostly to avoid next
+# Package all newly built ports
+elif [ $nbbuilt -eq 0 ]; then
 	if [ $PKGNG -eq 1 ]; then
 		msg "No package built, no need to update the repository"
 	else
 		msg "No package built, no need to update INDEX"
 	fi
+	BUILD_REPO=0
 else
 	[ "${NO_RESTRICTED:-no}" != "no" ] && clean_restricted
-	[ ${BUILD_REPO} -eq 1 ] && build_repo
 fi
+
+[ ${BUILD_REPO} -eq 1 ] && build_repo
 
 cleanup
 if [ $nbbuilt -gt 0 ]; then
@@ -285,6 +235,7 @@ if [ $nbskipped -gt 0 ]; then
 	echo ${skipped}
 	echo ""
 fi
+run_hook bulk done ${nbbuilt} ${nbfailed} ${nbignored} ${nbskipped}
 msg "[${MASTERNAME}] $nbbuilt packages built, $nbfailed failures, $nbignored ignored, $nbskipped skipped"
 show_log_info
 

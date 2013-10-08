@@ -26,15 +26,41 @@
 # SUCH DAMAGE.
 
 usage() {
-	echo "poudriere daemon [options]
+	cat << EOF
+poudriere daemon [options]
 
 Options:
-    -n        -- No daemonise
-    -p        -- pidfile
-    -k        -- kill the running daemon"
-
-    exit 1
+    -n        -- Do not daemonise
+    -p        -- Override the pidfile location
+    -k        -- Kill the running daemon
+EOF
+	exit 1
 }
+
+start_queue_reader() {
+	queue_reader_main &
+	QUEUE_READER_PID=$!
+}
+
+queue_reader_main() {
+	# Read from the socket and then write the command
+	# to the watchdir. This is done so non-privileged users
+	# do not need write access to the real queue dir
+	umask 0111 # Create rw-rw-rw
+	nc -klU ${QUEUE_SOCKET} | while read name command; do
+		echo "${command}" > ${WATCHDIR}/${name}
+	done
+}
+
+stop_queue_reader() {
+	if [ -n "${QUEUE_READER_PID}" ]; then
+		kill ${QUEUE_READER_PID} 2>/dev/null || :
+		_wait ${QUEUE_READER_PID} 2>/dev/null || :
+		unset QUEUE_READER_PID
+	fi
+	rm -f ${QUEUE_SOCKET}
+}
+
 
 SCRIPTPATH=`realpath $0`
 SCRIPTPREFIX=`dirname ${SCRIPTPATH}`
@@ -45,8 +71,6 @@ KILL=0
 . ${SCRIPTPREFIX}/common.sh
 
 if [ -z "${DAEMON_ARGS_PARSED}" ]; then
-	[ $# -eq 0 ] && usage
-
 	while getopts "knp:" FLAG; do
 		case "${FLAG}" in
 		n)
@@ -62,6 +86,9 @@ if [ -z "${DAEMON_ARGS_PARSED}" ]; then
 	done
 	if [ ${KILL} -eq 1 ]; then
 		pkill -15 -F ${PIDFILE} >/dev/null 2>&1 || exit 1
+		if [ -f ${PIDFILE} ]; then
+			rm ${PIDFILE}
+		fi
 		exit 0
 	fi
 
@@ -74,10 +101,21 @@ if [ -z "${DAEMON_ARGS_PARSED}" ]; then
 	fi
 fi
 
+# Start the queue reader
+start_queue_reader
+
+CLEANUP_HOOK=daemon_cleanup
+daemon_cleanup() {
+	stop_queue_reader
+}
+
 while :; do
 	next=$(find ${WATCHDIR} -type f -depth 1 -print -quit 2>/dev/null)
 	if [ -z "${next}" ]; then
 		dirwatch ${WATCHDIR}
+		if [ $? -ne 0 ]; then
+			err 1 "dirwatch terminated unsuccessfully"
+		fi
 		continue
 	fi
 	POUDRIERE_ARGS=$(sed -n "s/^POUDRIERE_ARGS: //p" ${next})

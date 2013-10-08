@@ -25,13 +25,14 @@
 # SUCH DAMAGE.
 
 usage() {
-	echo "poudriere status [options]
+	cat << EOF
+poudriere status [options]
 
 Options:
     -j name     -- Run on the given jail
     -p tree     -- Specify on which ports tree the configuration will be done
-    -z set      -- Specify which SET to use"
-
+    -z set      -- Specify which SET to use
+EOF
 	exit 1
 }
 
@@ -46,7 +47,7 @@ SETNAME=""
 while getopts "j:p:z:" FLAG; do
 	case "${FLAG}" in
 		j)
-			jail_exists ${OPTARG} || err 1 "No such jail"
+			jail_exists ${OPTARG} || err 1 "No such jail: ${OPTARG}"
 			JAILNAME=${OPTARG}
 			;;
 		p)
@@ -64,7 +65,8 @@ done
 
 shift $((OPTIND-1))
 
-if [ ${POUDRIERE_DATA}/build/*/ref = "${POUDRIERE_DATA}/build/*/ref" ]; then
+if [ $(find ${POUDRIERE_DATA}/build -mindepth 2 -maxdepth 2 2>&1 | wc -l) \
+	-eq 0 ] ; then
 	msg "No running builds"
 	exit 0
 fi
@@ -73,28 +75,32 @@ BUILDNAME=latest
 POUDRIERE_BUILD_TYPE=bulk
 
 if [ -n "${JAILNAME}" ]; then
-	mastername=${JAILNAME}-${PTNAME}${SETNAME:+-${SETNAME}}
-	mastermnt=${POUDRIERE_DATA}/build/${mastername}/ref
-	jail_runs ${mastername} || err 1 "No such jail running"
-	builders="$(MASTERNAME=$mastername bget builders 2>/dev/null || :)"
-	MASTERNAME=$mastername MASTERMNT=$mastermnt \
-		JOBS="${builders}" siginfo_handler
+	MASTERNAME=${JAILNAME}-${PTNAME}${SETNAME:+-${SETNAME}}
+	MASTERMNT=${POUDRIERE_DATA}/build/${MASTERNAME}/ref
+	jail_runs ${MASTERNAME} || err 1 "Jail, ${JAILNAME}, is not running"
+	builders="$(bget builders 2>/dev/null || :)"
+	# Dereference latest into actual buildname
+	BUILDNAME="$(bget buildname)"
+
+	JOBS="${builders}" siginfo_handler
 else
-	format="%-20s %-25s %6s %5s %6s %7s %7s %s\n"
+	format="%-30s %-25s %6s %5s %6s %7s %7s %7s %7s\n"
 	printf "${format}" "JAIL" "STATUS" "QUEUED" "BUILT" "FAILED" "SKIPPED" \
-		"IGNORED"
+		"IGNORED" "TOBUILD"
 	for mastermnt in ${POUDRIERE_DATA}/build/*/ref; do
 		[ "${mastermnt}" = "${POUDRIERE_DATA}/build/*/ref" ] && break
 		mastername=${mastermnt#${POUDRIERE_DATA}/build/}
-		mastername=${mastername%/ref}
+		MASTERNAME=${mastername%/ref}
 
-		status=$(MASTERNAME=$mastername bget status 2>/dev/null || :)
-		nbqueued=$(MASTERNAME=$mastername bget stats_queued 2>/dev/null || :)
-		nbfailed=$(MASTERNAME=$mastername bget stats_failed 2>/dev/null || :)
-		nbignored=$(MASTERNAME=$mastername bget stats_ignored 2>/dev/null || :)
-		nbskipped=$(MASTERNAME=$mastername bget stats_skipped 2>/dev/null || :)
-		nbbuilt=$(MASTERNAME=$mastername bget stats_built 2>/dev/null || :)
-		printf "${format}" "${mastername}" "${status}" "${nbqueued}" \
-			"${nbbuilt}" "${nbfailed}" "${nbskipped}" "${nbignored}"
+		status=$(bget status 2>/dev/null || :)
+		nbqueued=$(bget stats_queued 2>/dev/null || :)
+		nbfailed=$(bget stats_failed 2>/dev/null || :)
+		nbignored=$(bget stats_ignored 2>/dev/null || :)
+		nbskipped=$(bget stats_skipped 2>/dev/null || :)
+		nbbuilt=$(bget stats_built 2>/dev/null || :)
+		nbtobuild=$((nbqueued - (nbbuilt + nbfailed + nbskipped + nbignored)))
+		printf "${format}" "${MASTERNAME}" "${status}" "${nbqueued}" \
+			"${nbbuilt}" "${nbfailed}" "${nbskipped}" "${nbignored}" \
+			"${nbtobuild}"
 	done
 fi

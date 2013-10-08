@@ -25,41 +25,42 @@
  */
 
 #include <sys/types.h>
-#include <stdbool.h>
-#include <dirent.h>
-#include <string.h>
-#include <stdlib.h>
+#include <sys/event.h>
+#include <sys/time.h>
+#include <sys/stat.h>
+
+#include <unistd.h>
+#include <fcntl.h>
 #include <err.h>
- 
-bool
-dir_empty(const char *path)
-{
-	struct dirent *ent;
-	bool ret = true;
-	DIR *d;
 
-	if ((d = opendir(path)) == NULL)
-		err(EXIT_FAILURE, "%s: ", path);
-
-	while ((ent = readdir(d))) {
-		if (strcmp(ent->d_name, ".") == 0 || (strcmp(ent->d_name, "..")) == 0)
-			continue;
-		ret = false;
-		break;
-	}
-	closedir(d);
-
-	return (ret);
-}
- 
+/*
+ * Watch a directory and exit immediately once a new file is added.
+ * Used by poudriere-daemon to watch for items added by poudriere-queue
+ */
 int
 main(int argc, char **argv)
 {
-	if (argc != 2)
-		err(EXIT_FAILURE, "Argument missing");
- 
-	if (dir_empty(argv[1]))
-		return (EXIT_SUCCESS);
+	struct kevent event, change;
+	struct stat st;
+	int kq, fd;
 
-	return (EXIT_FAILURE);
+	if (argc != 2)
+		errx(1, "Missing the directory argument");
+
+	if (!(stat(argv[1], &st) == 0 && S_ISDIR(st.st_mode)))
+		errx(1, "%s: not a directory", argv[1]);
+
+	if ((kq = kqueue()) == -1)
+		err(1, "kqueue()");
+
+	fd = open(argv[1], O_RDONLY);
+
+	EV_SET(&change, fd, EVFILT_VNODE, EV_ADD | EV_ENABLE | EV_ONESHOT, NOTE_WRITE, 0, 0);
+
+	if (kevent(kq, &change, 1, &event, 1, NULL) < 0)
+		err(1, "kevent()");
+
+	close(fd);
+
+	return (0);
 }

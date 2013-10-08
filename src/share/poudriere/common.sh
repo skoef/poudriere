@@ -31,6 +31,23 @@ BSDPLATFORM=`uname -s | tr '[:upper:]' '[:lower:]'`
 dir_empty() {
 	find $1 -maxdepth 0 -empty
 }
+BLACKLIST=""
+
+# Return true if ran from bulk/testport, ie not daemon/status/jail
+was_a_bulk_run() {
+	[ "${0##*/}" = "bulk.sh" -o "${0##*/}" = "testport.sh" ]
+}
+# Return true if in a bulk or other jail run that needs to shutdown the jail
+was_a_jail_run() {
+	was_a_bulk_run ||  [ "${0##*/}" = "pkgclean.sh" ]
+}
+
+_wait() {
+	# Workaround 'wait' builtin possibly returning early due to signals
+	# by using 'pwait' to wait(2) and then 'wait' to collect return code
+	pwait "$@" 2>/dev/null || :
+	wait "$@"
+}
 
 err() {
 	export CRASHED=1
@@ -38,7 +55,9 @@ err() {
 		err 1 "err expects 2 arguments: exit_number \"message\""
 	fi
 	# Try to set status so other processes know this crashed
-	bset status "crashed:" 2>/dev/null || :
+	# Don't set it from children failures though, only master
+	[ -z "${PARALLEL_CHILD}" ] && was_a_bulk_run &&
+		bset status "${EXIT_STATUS:-crashed:}" 2>/dev/null || :
 	local err_msg="Error: $2"
 	msg "${err_msg}" >&2
 	[ -n "${MY_JOBID}" ] && job_msg "${err_msg}"
@@ -108,9 +127,16 @@ run_hook() {
 	[ -f ${hookfile} ] &&
 		URL_BASE="${URL_BASE}" \
 		POUDRIERE_BUILD_TYPE=${POUDRIERE_BUILD_TYPE} \
+		POUDRIERED="${POUDRIERED}" \
+		POUDRIERE_DATA="${POUDRIERE_DATA}" \
 		MASTERNAME="${MASTERNAME}" \
 		BUILDNAME="${BUILDNAME}" \
-		/bin/sh ${hookfile} $@
+		JAILNAME="${JAILNAME}" \
+		PTNAME="${PTNAME}" \
+		SETNAME="${SETNAME}" \
+		PACKAGES="${PACKAGES}" \
+		PACKAGES_ROOT="${PACKAGES_ROOT}" \
+		/bin/sh ${hookfile} "$@"
 	return 0
 }
 
@@ -124,18 +150,26 @@ log_start() {
 	# Make sure directory exists
 	mkdir -p ${log}/logs/success ${latest_log}
 
-	# Symlink to /latest-per-pkg/PORTNAME/PKGVERSION/MASTERNAME.log
-	ln -fs ${log}/../latest-per-pkg/${PKGNAME}.log \
-		${latest_log}/${MASTERNAME}.log
+	:> ${logfile}
 
-	# Symlink to JAIL/latest-per-pkg/PKGNAME.log
-	ln -fs ${log}/logs/${PKGNAME}.log \
-		${log}/../latest-per-pkg/${PKGNAME}.log
+	# Link to BUILD_TYPE/latest-per-pkg/PORTNAME/PKGVERSION/MASTERNAME.log
+	ln -f ${logfile} ${latest_log}/${MASTERNAME}.log
+
+	# Link to JAIL/latest-per-pkg/PKGNAME.log
+	ln -f ${logfile} ${log}/../latest-per-pkg/${PKGNAME}.log
 
 	# Tee all of the output to the logfile through a pipe
 	exec 3>&1 4>&2
 	[ ! -e ${logfile}.pipe ] && mkfifo ${logfile}.pipe
-	tee ${logfile} < ${logfile}.pipe >&3 &
+	{
+		if [ "${TIMESTAMP_LOGS:-no}" = "yes" ]; then
+			tee ${logfile} | while read line; do
+				echo "$(date "+%Y%m%d%H%M.%S") ${line}";
+			done
+		else
+			tee ${logfile}
+		fi
+	} < ${logfile}.pipe >&3 &
 	export tpid=$!
 	exec > ${logfile}.pipe 2>&1
 
@@ -203,7 +237,7 @@ log_stop() {
 	if [ -n "${tpid}" ]; then
 		exec 1>&3 3>&- 2>&4 4>&-
 		kill $tpid
-		wait $tpid 2>/dev/null || :
+		_wait $tpid 2>/dev/null || :
 		unset tpid
 	fi
 }
@@ -217,8 +251,8 @@ attr_set() {
 	echo "$@" > ${POUDRIERED}/${type}/${name}/${property} || :
 }
 
-jset() { attr_set jails $@ ; }
-pset() { attr_set ports $@ ; }
+jset() { attr_set jails "$@" ; }
+pset() { attr_set ports "$@" ; }
 
 attr_get() {
 	local type=$1
@@ -227,8 +261,8 @@ attr_get() {
 	cat ${POUDRIERED}/${type}/${name}/${property} || :
 }
 
-jget() { attr_get jails $@ ; }
-pget() { attr_get ports $@ ; }
+jget() { attr_get jails "$@" ; }
+pget() { attr_get ports "$@" ; }
 
 #build getter/setter
 bget() {
@@ -244,6 +278,7 @@ bget() {
 }
 
 bset() {
+	was_a_bulk_run || return 0
 	local id property mnt
 	local log=$(log_path)
 	if [ $# -eq 3 ]; then
@@ -277,6 +312,17 @@ update_stats() {
 		sort -u | wc -l)
 }
 
+sigint_handler() {
+	EXIT_STATUS="sigint:"
+	sig_handler
+}
+
+sigterm_handler() {
+	EXIT_STATUS="sigterm:"
+	sig_handler
+}
+
+
 sig_handler() {
 	trap - SIGTERM SIGKILL
 	# Ignore SIGINT while cleaning up
@@ -290,17 +336,12 @@ exit_handler() {
 	# Ignore SIGINT while cleaning up
 	trap '' SIGINT
 
-	if [ ${STATUS} -eq 1 ] && [ "${POUDRIERE_BUILD_TYPE}" = "bulk" \
-		-o "${POUDRIERE_BUILD_TYPE}" = "testport" ]; then
+	if was_a_bulk_run; then
 		log_stop
 		stop_html_json
 	fi
 
-	# Kill all children - this does NOT recurse, so orphans can still
-	# occur. This is just to avoid requiring pid files for parallel_run
-	for pid in $(jobs -p); do
-		kill ${pid} 2>/dev/null || :
-	done
+	parallel_shutdown
 
 	[ ${STATUS} -eq 1 ] && cleanup
 
@@ -332,7 +373,7 @@ siginfo_handler() {
 	local format_origin_phase format_phase
 
 	[ -n "${nbq}" ] || return 0
-	[ "${status}" = "index:" ] && return 0
+	[ "${status}" = "index:" -o "${status}" = "crashed:" ] && return 0
 
 	if [ ${nbq} -gt 9999 ]; then
 		queue_width=5
@@ -350,7 +391,7 @@ siginfo_handler() {
 
 		# Collect build stats into a string with minimal execs
 		pkgname_buildtimes=$(find ${MASTERMNT}/poudriere/building -depth 1 \
-			-exec stat -f "%N %m" {} + | \
+			-exec stat -f "%N %m" {} + 2>/dev/null | \
 			awk -v now=${now} -f ${AWKPREFIX}/siginfo_buildtime.awk)
 
 		for j in ${JOBS}; do
@@ -420,7 +461,8 @@ get_data_dir() {
 	fi
 
 	if [ -z "${NO_ZFS}" ]; then
-		data=$(zfs list -rt filesystem -H -o ${NS}:type,mountpoint ${ZPOOL}${ZROOTFS} | awk '$1 == "data" { print $2 }' | head -n 1)
+		data=$(zfs list -rt filesystem -H -o ${NS}:type,mountpoint ${ZPOOL}${ZROOTFS} 2>/dev/null |
+		    awk '$1 == "data" { print $2 }' | head -n 1)
 		if [ -n "${data}" ]; then
 			echo $data
 			return
@@ -452,12 +494,15 @@ unmarkfs() {
 }
 
 markfs() {
-	[ $# -lt 2 ] && eargs name mnt
+	[ $# -lt 2 ] && eargs name mnt path
 	local name=$1
 	local mnt=$(realpath $2)
+	local path="$3"
 	local fs="$(zfs_getfs ${mnt})"
 	local dozfs=0
 	local domtree=0
+
+	msg_n "Recording filesystem state for ${name}..."
 
 	case "${name}" in
 	clean) [ -n "${fs}" ] && dozfs=1 ;;
@@ -471,8 +516,9 @@ markfs() {
 			domtree=0
 		fi
 		;;
-	prebuild) domtree=1 ;;
+	prebuild|prestage) domtree=1 ;;
 	preinst) domtree=1 ;;
+	poststage) domtree=1 ;;
 	esac
 
 	if [ $dozfs -eq 1 ]; then
@@ -482,11 +528,16 @@ markfs() {
 		zfs snapshot ${fs}@${name}
 	fi
 
-	[ $domtree -eq 0 ] && return 0
+	if [ $domtree -eq 0 ]; then
+		echo " done"
+		return 0
+	fi
 	mkdir -p ${mnt}/poudriere/
-	if [ "${name}" = "prepkg" ]; then
-		cat > ${mnt}/poudriere/mtree.${name}exclude << EOF
-./ccache/*
+
+	case "${name}" in
+		prepkg|poststage)
+			cat > ${mnt}/poudriere/mtree.${name}exclude << EOF
+.${HOME}/.ccache/*
 ./compat/linux/proc
 ./dev/*
 ./distfiles/*
@@ -499,9 +550,10 @@ markfs() {
 ./var/db/ports/*
 ./wrkdirs/*
 EOF
-	elif [ "${name}" = "prebuild" ]; then
-		cat >  ${mnt}/poudriere/mtree.${name}exclude << EOF
-./ccache/*
+			;;
+		prebuild|prestage)
+			cat > ${mnt}/poudriere/mtree.${name}exclude << EOF
+.${HOME}/.ccache/*
 ./compat/linux/proc
 ./dev/*
 ./distfiles/*
@@ -515,9 +567,11 @@ EOF
 ./var/db/ports/*
 ./wrkdirs/*
 EOF
-	elif [ "${name}" = "preinst" ]; then
-		cat >  ${mnt}/poudriere/mtree.${name}exclude << EOF
-./ccache/*
+			;;
+		preinst)
+			cat >  ${mnt}/poudriere/mtree.${name}exclude << EOF
+.${HOME}/*
+.${HOME}/.ccache/*
 ./compat/linux/proc/*
 ./dev/*
 ./distfiles/*
@@ -533,25 +587,22 @@ EOF
 ./packages/*
 ./poudriere/*
 ./proc/*
-.${HOME}/*
 ./tmp/*
 .${PORTSRC}/*
-.${LOCALBASE:-/usr/local}/etc/gconf/gconf.xml.defaults
-.${LOCALBASE:-/usr/local}/lib/charset.alias
-.${LOCALBASE:-/usr/local}/share/applications/mimeinfo.cache
-.${LOCALBASE:-/usr/local}/share/nls/POSIX
-.${LOCALBASE:-/usr/local}/share/nls/en_US.US-ASCII
 ./usr/src
-./var/db/*
+./var/db/pkg/*
+./var/db/ports/*
 ./var/log/*
 ./var/mail/*
 ./var/run/*
 ./wrkdirs/*
 EOF
-	fi
+		;;
+	esac
 	mtree -X ${mnt}/poudriere/mtree.${name}exclude \
 		-cn -k uid,gid,mode,size \
-		-p ${mnt} > ${mnt}/poudriere/mtree.${name}
+		-p ${mnt}${path} > ${mnt}/poudriere/mtree.${name}
+	echo " done"
 }
 
 use_options() {
@@ -576,39 +627,120 @@ use_options() {
 
 mount_packages() {
 	local mnt=$(my_path)
-	mount -t nullfs "$@" ${POUDRIERE_DATA}/packages/${MASTERNAME} \
+	mount -t nullfs "$@" ${PACKAGES} \
 		${mnt}/packages ||
 		err 1 "Failed to mount the packages directory "
 }
 
+load_blacklist() {
+	[ $# -lt 2 ] && dst_makeconf eargs name ptname setname
+	local name=$1
+	local ptname=$3
+	local setname=$4
+	local bl b bfile
+
+	bl="- ${setname} ${ptname} ${name} ${name}-${ptname}"
+	[ -n "${setname}" ] && bl="${bl} ${bl}-${setname} \
+		${name}-${ptname}-${setname}"
+	for b in ${bl} ; do
+		if [ "${b}" = "-" ]; then
+			unset b
+		fi
+		bfile=${b:+${b}-}blacklist
+		[ -f ${POUDRIERED}/${bfile} ] || continue
+		for port in `grep -h -v -E '(^[[:space:]]*#|^[[:space:]]*$)' ${POUDRIERED}/${bfile}`; do
+			case " ${BLACKLIST} " in
+			*\ ${port}\ *) continue;;
+			esac
+			msg "Blacklisting (from ${POUDRIERED}/${bfile}): ${port}"
+			BLACKLIST="${BLACKLIST} ${port}"
+		done
+	done
+}
+
+setup_makeconf() {
+	[ $# -lt 3 ] && dst_makeconf eargs name ptname setname
+	local dst_makeconf=$1
+	local name=$2
+	local ptname=$3
+	local setname=$4
+	local makeconf opt
+
+	makeconf="- ${setname} ${ptname} ${name} ${name}-${ptname}"
+	[ -n "${setname}" ] && makeconf="${makeconf} ${name}-${setname} \
+		    ${name}-${ptname}-${setname}"
+	for opt in ${makeconf}; do
+		append_make ${opt} ${dst_makeconf}
+	done
+}
+
+# return 0 if the package dir exists and has packages, 0 otherwise
+package_dir_exists_and_has_packages() {
+	[ ! -d ${PACKAGES}/All ] && return 1
+	dirempty ${PACKAGES}/All && return 1
+	# Check for non-empty directory with no packages in it
+	for pkg in ${PACKAGES}/All/*.${PKG_EXT}; do
+		[ "${pkg}" = \
+		    "${PACKAGES}/All/*.${PKG_EXT}" ] \
+		    && return 1
+		# Stop on first match
+		break
+	done
+	return 0
+}
+
+sanity_check_pkg() {
+	[ $# -eq 1 ] || eargs pkg
+	local pkg="$1"
+	local depfile origin
+
+	origin=$(pkg_get_origin "${pkg}")
+	port_is_needed "${origin}" || return 0
+	depfile="$(deps_file "${pkg}")"
+	while read dep; do
+		if [ ! -e "${PACKAGES}/All/${dep}.${PKG_EXT}" ]; then
+			msg_debug "${pkg} needs missing ${PACKAGES}/All/${dep}.${PKG_EXT}"
+			msg "Deleting ${pkg##*/}: missing dependency: ${dep}"
+			delete_pkg "${pkg}"
+			return 65	# Package deleted, need another pass
+		fi
+	done < "${depfile}"
+
+	return 0
+}
+
 sanity_check_pkgs() {
 	local ret=0
-	local depfile
-	[ ! -d ${POUDRIERE_DATA}/packages/${MASTERNAME}/All ] && return $ret
-	dirempty ${POUDRIERE_DATA}/packages/${MASTERNAME}/All && return $ret
-	for pkg in ${POUDRIERE_DATA}/packages/${MASTERNAME}/All/*.${PKG_EXT}; do
-		# Check for non-empty directory with no packages in it
-		[ "${pkg}" = "${POUDRIERE_DATA}/packages/${MASTERNAME}/All/*.${PKG_EXT}" ] && break
-		depfile=$(deps_file ${pkg})
-		while read dep; do
-			if [ ! -e "${POUDRIERE_DATA}/packages/${MASTERNAME}/All/${dep}.${PKG_EXT}" ]; then
-				ret=1
-				msg_debug "${pkg} needs missing ${POUDRIERE_DATA}/packages/${MASTERNAME}/All/${dep}.${PKG_EXT}"
-				msg "Deleting ${pkg##*/}: missing dependency: ${dep}"
-				delete_pkg ${pkg}
-				break
-			fi
-		done < "${depfile}"
-	done
 
-	return $ret
+	package_dir_exists_and_has_packages || return 0
+
+	parallel_start
+	for pkg in ${PACKAGES}/All/*.${PKG_EXT}; do
+		parallel_run sanity_check_pkg "${pkg}" || ret=$?
+	done
+	parallel_stop || ret=$?
+	[ ${ret} -eq 0 ] && return 0	# Nothing deleted
+	[ ${ret} -eq 65 ] && return 1	# Packages deleted
+	err 1 "Failure during sanity check"
 }
 
 check_leftovers() {
+	[ $# -lt 1 ] && eargs mnt [stagedir]
 	local mnt=$1
-	mtree -X ${mnt}/poudriere/mtree.preinstexclude \
-		-f ${mnt}/poudriere/mtree.preinst \
-		-p ${mnt} | while read l ; do
+	local stagedir="$2"
+
+	{
+		if [ -z "${stagedir}" ]; then
+			mtree -X ${mnt}/poudriere/mtree.preinstexclude \
+			    -f ${mnt}/poudriere/mtree.preinst \
+			    -p ${mnt}
+		else
+			markfs poststage ${mnt} ${stagedir}
+			mtree -X ${mnt}/poudriere/mtree.preinstexclude \
+			    -f ${mnt}/poudriere/mtree.poststage \
+			    -e -p ${mnt}
+		fi
+	} | while read l ; do
 		case ${l} in
 		*extra)
 			if [ -d ${mnt}/${l% *} ]; then
@@ -624,6 +756,36 @@ check_leftovers() {
 		*changed) echo "M ${mnt}/${l% *}" ;;
 		esac
 	done
+}
+
+check_fs_violation() {
+	[ $# -eq 6 ] || eargs mnt mtree_target port status_msg err_msg \
+	    status_value
+	local mnt="$1"
+	local mtree_target="$2"
+	local port="$3"
+	local status_msg="$4"
+	local err_msg="$5"
+	local status_value="$6"
+	local tmpfile=${mnt}/tmp/check_fs_violation
+	local ret=0
+
+	msg_n "${status_msg}..."
+	mtree -X ${mnt}/poudriere/mtree.${mtree_target}exclude \
+		-f ${mnt}/poudriere/mtree.${mtree_target} \
+		-p ${mnt} > ${tmpfile}
+	echo " done"
+
+	if [ -s ${tmpfile} ]; then
+		msg "Error: ${err_msg}"
+		cat ${tmpfile}
+		bset ${MY_JOBID} status "${status_value}:${port}"
+		job_msg_verbose "Status for build ${port}: ${status_value}"
+		ret=1
+	fi
+	rm -f ${tmpfile}
+
+	return $ret
 }
 
 nohang() {
@@ -665,7 +827,7 @@ nohang() {
 	# Now wait on the cmd with a timeout on the log's mtime
 	while :; do
 		if ! kill -CHLD $childpid 2>/dev/null; then
-			wait $childpid || ret=1
+			_wait $childpid || ret=1
 			break
 		fi
 
@@ -689,7 +851,7 @@ nohang() {
 		unset n; until trappedinfo=; read -t $read_timeout n <&7 ||
 			[ -z "$trappedinfo" ]; do :; done
 		if [ "${n}" = "done" ]; then
-			wait $childpid || ret=1
+			_wait $childpid || ret=1
 			break
 		fi
 		# Not done, was a timeout, check the log time
@@ -709,11 +871,12 @@ gather_distfiles() {
 	sub=$(injail make -C ${portdir} -VDIST_SUBDIR)
 	dists=$(injail make -C ${portdir} -V_DISTFILES -V_PATCHFILES)
 	specials=$(injail make -C ${portdir} -V_DEPEND_SPECIALS)
-	job_msg_verbose "Providing distfiles for ${portdir}"
+	job_msg_verbose "Status for build ${portdir##/usr/ports/}: distfiles"
 	for d in ${dists}; do
 		[ -f ${DISTFILES_CACHE}/${sub}/${d} ] || continue
 		echo ${DISTFILES_CACHE}/${sub}/${d}
-	done | pax -rw -p p -s ",${DISTFILES_CACHE},,g" ${mnt}/portdistfiles
+	done | pax -rw -p p -s ",${DISTFILES_CACHE},,g" ${mnt}/portdistfiles ||
+		return 1
 
 	for special in ${specials}; do
 		gather_distfiles ${special} ${distfiles}
@@ -723,19 +886,40 @@ gather_distfiles() {
 }
 
 # Build+test port and return on first failure
-build_port() {
+_real_build_port() {
 	[ $# -ne 1 ] && eargs portdir
 	local portdir=$1
 	local port=${portdir##${PORTSRC}/}
-	local targets="check-config pkg-depends fetch-depends fetch checksum \
-				   extract-depends extract patch-depends patch build-depends \
-				   lib-depends configure build install-mtree run-depends \
-				   install package ${PORTTESTING:+deinstall}"
 	local mnt=$(my_path)
 	local log=$(log_path)
 	local listfilecmd network
 	local hangstatus
 	local pkgenv
+	local no_stage=$(injail make -C ${portdir} -VNO_STAGE)
+	local targets install_order build_fs_violation_check_target
+	local stagedir plistsub_sed
+	local jailuser
+
+	# Must install run-depends as 'actual-package-depends' and autodeps
+	# only consider installed packages as dependencies
+	if [ -n "${no_stage}" ]; then
+		install_order="run-depends install-mtree install package"
+		build_fs_violation_check_target="run-depends"
+	else
+		jailuser=root
+		if [ "${BUILD_AS_NON_ROOT}" = "yes" ] &&
+		    [ -z "$(injail make -C ${portdir} -VNEED_ROOT)" ]; then
+			jailuser=${PORTBUILD_USER}
+			chown -R ${jailuser} ${mnt}/wrkdirs
+		fi
+		install_order="run-depends stage package install-mtree install"
+		build_fs_violation_check_target="run-depends"
+		stagedir=$(injail make -C ${portdir} -VSTAGEDIR)
+	fi
+	targets="check-config pkg-depends fetch-depends fetch checksum \
+		  extract-depends extract patch-depends patch build-depends \
+		  lib-depends configure build ${install_order} \
+		  ${PORTTESTING:+deinstall}"
 
 	# If not testing, then avoid rechecking deps in build/install;
 	# When testing, check depends twice to ensure they depend on
@@ -744,41 +928,52 @@ build_port() {
 	[ -z "${PORTTESTING}" ] && PORT_FLAGS="${PORT_FLAGS} NO_DEPENDS=yes"
 
 	for phase in ${targets}; do
+		[ -z "${no_stage}" ] && JUSER=${jailuser}
 		bset ${MY_JOBID} status "${phase}:${port}"
 		job_msg_verbose "Status   ${port}: ${phase}"
-		if [ "${phase}" = "fetch" ]; then
+		case ${phase} in
+		fetch)
 			jstop
 			jstart 1
-		fi
-		case ${phase} in
+			JUSER=root
+			;;
+		extract)
+			chown -R ${JUSER} ${mnt}/wrkdirs
+			;;
+		*-depends|install-mtree) JUSER=root ;;
 		configure) [ -n "${PORTTESTING}" ] && markfs prebuild ${mnt} ;;
-		install-mtree)
+		${build_fs_violation_check_target})
 			if [ -n "${PORTTESTING}" ]; then
-				mtree -X ${mnt}/poudriere/mtree.prebuildexclude \
-					-f ${mnt}/poudriere/mtree.prebuild \
-					-p ${mnt} > ${mnt}/tmp/preinst
-				if [ -s ${mnt}/tmp/preinst ]; then
-					msg "Filesystem touched before install:"
-					cat ${mnt}/tmp/preinst
-					rm -f ${mnt}/tmp/preinst
-					bset ${MY_JOBID} status "preinst_fs_violation:${port}"
-					job_msg_verbose "Status for build ${port}: preinst_fs_violation"
-					return 1
-				fi
-				rm -f ${mnt}/tmp/preinst
+				check_fs_violation ${mnt} prebuild "${port}" \
+				    "Checking for filesystem violations" \
+				    "Filesystem touched during build:" \
+				    "build_fs_violation" ||
+				    return 1
 			fi
 			;;
-		install) [ -n "${PORTTESTING}" ] && markfs preinst ${mnt} ;;
+		stage) [ -n "${PORTTESTING}" ] && markfs prestage ${mnt} ;;
+		install)
+			JUSER=root
+			[ -n "${PORTTESTING}" ] && markfs preinst ${mnt}
+			;;
+		package)
+			if [ -n "${PORTTESTING}" ] &&
+			    [ -z "${no_stage}" ]; then
+				check_fs_violation ${mnt} prestage "${port}" \
+				    "Checking for staging violations" \
+				    "Filesystem touched during stage (files must install to \${STAGEDIR}):" \
+				    "stage_fs_violation" || return 1
+			fi
+			;;
 		deinstall)
+			JUSER=root
 			# Skip for all linux ports, they are not safe
 			if [ "${PKGNAME%%*linux*}" != "" ]; then
 				msg "Checking shared library dependencies"
 				listfilecmd="grep -v '^@' /var/db/pkg/${PKGNAME}/+CONTENTS"
 				[ ${PKGNG} -eq 1 ] && listfilecmd="pkg query '%Fp' ${PKGNAME}"
-				echo "${listfilecmd} | xargs ldd 2>&1 |
-					awk '/=>/ { print $3 }' | sort -u" > ${mnt}/shared.sh
-				injail sh /shared.sh
-				rm -f ${mnt}/shared.sh
+				injail ${listfilecmd} | injail xargs ldd 2>&1 |
+					awk '/=>/ { print $3 }' | sort -u
 			fi
 			;;
 		esac
@@ -788,27 +983,100 @@ build_port() {
 		if [ "${phase}" = "package" ]; then
 			echo "PACKAGES=/new_packages" >> ${mnt}/etc/make.conf
 			# Create sandboxed staging dir for new package for this build
-			rm -rf "${POUDRIERE_DATA}/packages/${MASTERNAME}/.new_packages/${PKGNAME}"
-			mkdir -p "${POUDRIERE_DATA}/packages/${MASTERNAME}/.new_packages/${PKGNAME}"
+			rm -rf "${PACKAGES}/.new_packages/${PKGNAME}"
+			mkdir -p "${PACKAGES}/.new_packages/${PKGNAME}"
 			${NULLMOUNT} \
-				"${POUDRIERE_DATA}/packages/${MASTERNAME}/.new_packages/${PKGNAME}" \
+				"${PACKAGES}/.new_packages/${PKGNAME}" \
 				${mnt}/new_packages
+			chown -R ${JUSER} ${mnt}/new_packages
+		fi
+
+		if [ "${phase}" = "deinstall" ]; then
+			plistsub_sed=$(injail env ${PORT_FLAGS} make -C ${portdir} -V'PLIST_SUB:C/"//g:NLIB32*:NPERL_*:NPREFIX*:N*="":N*="@comment*:C/(.*)=(.*)/-es!\2!%%\1%%!g/')
+			PREFIX=$(injail env ${PORT_FLAGS} make -C ${portdir} -VPREFIX)
+			if [ -z "${no_stage}" ]; then
+				msg "Checking for orphaned files and directories in stage directory (missing from plist)"
+				bset ${MY_JOBID} status "stage_orphans:${port}"
+				local orphans=$(mktemp ${mnt}/tmp/orphans.XXXXXX)
+				local die=0
+
+				check_leftovers ${mnt} ${stagedir} | \
+				    while read modtype path; do
+					local ppath
+
+					# If this is a directory, use @dirrm in output
+					if [ -d "${path}" ]; then
+						ppath="@dirrm "`echo $path | sed \
+							-e "s,^${mnt},," \
+							-e "s,^${PREFIX}/,," \
+							${plistsub_sed} \
+						`
+					else
+						ppath=`echo "$path" | sed \
+							-e "s,^${mnt},," \
+							-e "s,^${PREFIX}/,," \
+							${plistsub_sed} \
+						`
+					fi
+
+					[ "${modtype}" = "M" ] && continue
+
+					# Ignore PREFIX as orphan, which
+					# happens via stage-dir if
+					# NO_MTREE is set
+					[ "${path#${mnt}}" != "${PREFIX}" ] &&
+					  [ "${path#${mnt}}" != "/usr" ] &&
+					  [ "${path#${mnt}}" != "/." ] &&
+					    echo "${ppath}" >> ${orphans}
+				done
+
+				if [ -s "${orphans}" ]; then
+					msg "Files or directories orphaned:"
+					die=1
+					grep -v "^@dirrm" ${orphans}
+					grep "^@dirrm" ${orphans} | sort -r
+				fi
+				[ ${die} -eq 1 -a "${0##*/}" = "testport.sh" -a \
+				    "${PREFIX}" != "${LOCALBASE}" ] && msg \
+				    "This test was done with PREFIX!=LOCALBASE which \
+may show failures if the port does not respect PREFIX. \
+Try testport with -n to use PREFIX=LOCALBASE"
+				rm -f ${orphans}
+				[ $die -eq 0 ] || return 1
+
+				msg "Checking for absolute symlinks into staging directory"
+				bset ${MY_JOBID} status "stage_symlinks:${port}"
+				if [ ${PKGNG} -eq 1 ]; then
+					injail ${PKG_BIN} query %Fp ${PKGNAME}
+				else
+					injail pkg_info -qL ${PKGNAME}
+				fi | injail xargs -J % find % -type l |
+				    injail xargs stat -l |
+				    grep "${portdir}/work/stage" && die=1
+				if [ ${die} -eq 1 ]; then
+					msg "Port is installing absolute symlinks into stagedir"
+					return 1
+				fi
+			fi
 		fi
 
 		if [ "${phase#*-}" = "depends" ]; then
 			# No need for nohang or PORT_FLAGS for *-depends
-			injail make -C ${portdir} ${phase} || return 1
+			injail env USE_PACKAGE_DEPENDS_ONLY=1 \
+			    make -C ${portdir} ${phase} || return 1
 		else
-			# Only set PKGENV during 'package' to prevent testport-built
-			# packages from going into the main repo
-			if [ "${phase}" = "package" ]; then
+			# Only set PKGENV during 'package' to prevent
+			# testport-built packages from going into the main repo
+			# Also enable during stage/install since it now
+			# uses a pkg for pkg_tools
+			if [ "${phase}" = "package" ] || [ -z "${no_stage}" \
+			    -a "${phase}" = "install" -a $PKGNG -eq 0 ]; then
 				pkgenv="${PKGENV}"
 			else
 				pkgenv=
 			fi
 
-			# 24 hours for 1 command, or 20 minutes with no log update
-			nohang ${MAX_EXECUTION_TIME:-86400} ${NOHANG_TIME:-7200} \
+			nohang ${MAX_EXECUTION_TIME} ${NOHANG_TIME} \
 				${log}/logs/${PKGNAME}.log \
 				injail env ${pkgenv} ${PORT_FLAGS} \
 				make -C ${portdir} ${phase}
@@ -818,11 +1086,11 @@ build_port() {
 				# 2 = log timed out
 				# 3 = cmd timeout
 				if [ $hangstatus -eq 2 ]; then
-					msg "Killing runaway build"
+					msg "Killing runaway build after ${NOHANG_TIME} seconds with no output"
 					bset ${MY_JOBID} status "${phase}/runaway:${port}"
 					job_msg_verbose "Status   ${port}: runaway"
 				elif [ $hangstatus -eq 3 ]; then
-					msg "Killing timed out build"
+					msg "Killing timed out build after ${MAX_EXECUTION_TIME} seconds"
 					bset ${MY_JOBID} status "${phase}/timeout:${port}"
 					job_msg_verbose "Status   ${port}: timeout"
 				fi
@@ -839,12 +1107,11 @@ build_port() {
 		if [ "${phase}" = "checksum" ]; then
 			mkdir -p ${mnt}/portdistfiles
 			echo "DISTDIR=/portdistfiles" >> ${mnt}/etc/make.conf
-			gather_distfiles ${portdir} ${mnt}/portdistfiles
+			gather_distfiles ${portdir} ${mnt}/portdistfiles || return 1
 		fi
 
 		if [ "${phase}" = "deinstall" ]; then
 			msg "Checking for extra files and directories"
-			PREFIX=$(injail env ${PORT_FLAGS} make -C ${portdir} -VPREFIX)
 			bset ${MY_JOBID} status "leftovers:${port}"
 			local add=$(mktemp ${mnt}/tmp/add.XXXXXX)
 			local add1=$(mktemp ${mnt}/tmp/add1.XXXXXX)
@@ -853,8 +1120,6 @@ build_port() {
 			local mod=$(mktemp ${mnt}/tmp/mod.XXXXXX)
 			local mod1=$(mktemp ${mnt}/tmp/mod1.XXXXXX)
 			local die=0
-
-			sedargs=$(injail env ${PORT_FLAGS} make -C ${portdir} -V'PLIST_SUB:C/"//g:NLIB32*:NPERL_*:NPREFIX*:N*="":N*="@comment*:C/(.*)=(.*)/-es!\2!%%\1%%!g/')
 
 			check_leftovers ${mnt} | \
 				while read modtype path; do
@@ -865,18 +1130,22 @@ build_port() {
 					ppath="@dirrm "`echo $path | sed \
 						-e "s,^${mnt},," \
 						-e "s,^${PREFIX}/,," \
-						${sedargs} \
+						${plistsub_sed} \
 					`
 				else
 					ppath=`echo "$path" | sed \
 						-e "s,^${mnt},," \
 						-e "s,^${PREFIX}/,," \
-						${sedargs} \
+						${plistsub_sed} \
 					`
 				fi
 				case $modtype in
 				+)
 					case "${ppath}" in
+					# gconftool-2 --makefile-uninstall-rule is unpredictable
+					etc/gconf/gconf.xml.defaults/%gconf-tree*.xml) ;;
+					# fc-cache - skip for now
+					/var/db/fontconfig/*) ;;
 					*) echo "${ppath}" >> ${add} ;;
 					esac
 					;;
@@ -886,6 +1155,11 @@ build_port() {
 					[ "${path#${mnt}}" = "${PREFIX}" -a \
 						"${LOCALBASE}" != "${PREFIX}" ] && ignore_path=1
 
+					# fc-cache - skip for now
+					case "${ppath}" in
+					/var/db/fontconfig/*) ignore_path=1 ;;
+					esac
+
 					if [ $ignore_path -eq 0 ]; then
 						echo "${ppath}" >> ${del}
 					fi
@@ -893,17 +1167,24 @@ build_port() {
 				M)
 					[ -d "${path}" ] && continue
 					case "${ppath}" in
+					# gconftool-2 --makefile-uninstall-rule is unpredictable
+					etc/gconf/gconf.xml.defaults/%gconf-tree*.xml) ;;
 					# This is a cache file for gio modules could be modified for any gio modules
 					lib/gio/modules/giomodule.cache) ;;
 					# removal of info files leaves entry uneasy to cleanup in info/dir
 					# accept a modification of this file
 					info/dir) ;;
+					*/info/dir) ;;
 					# The is pear database cache
 					%%PEARDIR%%/.depdb|%%PEARDIR%%/.filemap) ;;
 					#ls-R files from texmf are often regenerated
 					*/ls-R);;
+					# Octave packages database, blank lines can be inserted between pre-install and post-deinstall
+					share/octave/octave_packages) ;;
 					# xmlcatmgr is constantly updating catalog.ports ignore modification to that file
 					share/xml/catalog.ports);;
+					# fc-cache - skip for now
+					/var/db/fontconfig/*) ;;
 					*) echo "${ppath}" >> ${mod} ;;
 					esac
 					;;
@@ -931,26 +1212,38 @@ build_port() {
 				die=1
 				cat ${mod1}
 			fi
+			[ ${die} -eq 1 -a "${0##*/}" = "testport.sh" -a \
+			    "${PREFIX}" != "${LOCALBASE}" ] && msg \
+			    "This test was done with PREFIX!=LOCALBASE which \
+may show failures if the port does not respect PREFIX. \
+Try testport with -n to use PREFIX=LOCALBASE"
 			rm -f ${add} ${add1} ${del} ${del1} ${mod} ${mod1}
 			[ $die -eq 0 ] || return 1
 		fi
 	done
 
-	if [ -d "${POUDRIERE_DATA}/packages/${MASTERNAME}/.new_packages/${PKGNAME}" ]; then
+	if [ -d "${PACKAGES}/.new_packages/${PKGNAME}" ]; then
 		# everything was fine we can copy package the package to the package
 		# directory
-		find ${POUDRIERE_DATA}/packages/${MASTERNAME}/.new_packages/${PKGNAME} \
+		find ${PACKAGES}/.new_packages/${PKGNAME} \
 			-mindepth 1 \( -type f -or -type l \) | while read pkg_path; do
-			pkg_file=${pkg_path#${POUDRIERE_DATA}/packages/${MASTERNAME}/.new_packages/${PKGNAME}}
+			pkg_file=${pkg_path#${PACKAGES}/.new_packages/${PKGNAME}}
 			pkg_base=${pkg_file%/*}
-			mkdir -p ${POUDRIERE_DATA}/packages/${MASTERNAME}/${pkg_base}
-			mv ${pkg_path} ${POUDRIERE_DATA}/packages/${MASTERNAME}/${pkg_base}
+			mkdir -p ${PACKAGES}/${pkg_base}
+			mv ${pkg_path} ${PACKAGES}/${pkg_base}
 		done
-		rm -rf "${POUDRIERE_DATA}/packages/${MASTERNAME}/.new_packages/${PKGNAME}"
 	fi
 
 	bset ${MY_JOBID} status "idle:"
 	return 0
+}
+
+# Wrapper to ensure JUSER is reset and any other cleanup needed
+build_port() {
+	local ret
+	_real_build_port "$@" || ret=$?
+	JUSER=root
+	return ${ret}
 }
 
 # Save wrkdir and return path to file
@@ -983,7 +1276,6 @@ save_wrkdir() {
 
 	job_msg "Saved ${port} wrkdir to: ${tarname}"
 }
-
 
 deadlock_detected() {
 	local always_fail=${1:-1}
@@ -1037,9 +1329,11 @@ mark_done() {
 	local origin=$(cache_get_origin "${pkgname}")
 	local cache_dir=$(cache_dir)
 
-	echo -n "${origin} $(date +%s) " >> ${cache_dir}/buildtimes
-	stat -f "%m" ${MASTERMNT}/poudriere/building/${pkgname} >> \
-		${cache_dir}/buildtimes
+	if [ "${TRACK_BUILDTIMES:-no}" != "no" ]; then
+		echo -n "${origin} $(date +%s) " >> ${cache_dir}/buildtimes
+		stat -f "%m" ${MASTERMNT}/poudriere/building/${pkgname} >> \
+			${cache_dir}/buildtimes
+	fi
 	rmdir ${MASTERMNT}/poudriere/building/${pkgname}
 }
 
@@ -1081,7 +1375,8 @@ build_queue() {
 				# Pool is waiting on dep, wait until a build
 				# is done before checking the queue again
 			else
-				MY_JOBID="${j}" build_pkg "${pkgname}" > /dev/null &
+				MY_JOBID="${j}" PORTTESTING=$(get_porttesting "${pkgname}") \
+					build_pkg "${pkgname}" > /dev/null &
 				echo "$!" > ${MASTERMNT}/poudriere/var/run/${j}.pid
 				echo "${pkgname}" > ${MASTERMNT}/poudriere/var/run/${j}.pkgname
 
@@ -1127,26 +1422,31 @@ json_main() {
 
 build_json() {
 	local log=$(log_path)
-	awk -vbuildname="${BUILDNAME}" \
-		-vjail="${MASTERNAME}" \
-		-vsetname="${SETNAME}" \
-		-vptname="${PTNAME}" \
+	awk \
 		-f ${AWKPREFIX}/json.awk ${log}/.poudriere.* | \
 		awk 'ORS=""; {print}' | \
 		sed  -e 's/,\([]}]\)/\1/g' \
 		> ${log}/.data.json.tmp
 	mv -f ${log}/.data.json.tmp ${log}/.data.json
+
+	# Build mini json for stats
+	awk -v mini=yes \
+		-f ${AWKPREFIX}/json.awk ${log}/.poudriere.* | \
+		awk 'ORS=""; {print}' | \
+		sed  -e 's/,\([]}]\)/\1/g' \
+		> ${log}/.data.mini.json.tmp
+	mv -f ${log}/.data.mini.json.tmp ${log}/.data.mini.json
 }
 
 stop_html_json() {
 	local log=$(log_path)
 	if [ -n "${JSON_PID}" ]; then
 		kill ${JSON_PID} 2>/dev/null || :
-		wait ${JSON_PID} 2>/dev/null || :
+		_wait ${JSON_PID} 2>/dev/null || :
 		unset JSON_PID
 	fi
 	build_json 2>/dev/null || :
-	rm -f ${log}/.data.json.tmp 2>/dev/null || :
+	rm -f ${log}/.data.json.tmp ${log}/.data.mini.json 2>/dev/null || :
 }
 
 # Build ports in parallel
@@ -1200,7 +1500,7 @@ parallel_build() {
 	# Restore PARALLEL_JOBS
 	PARALLEL_JOBS=${real_parallel_jobs}
 
-	return $(($(bget stats_failed) + $(bget stats_skipped)))
+	return 0
 }
 
 clean_pool() {
@@ -1227,7 +1527,7 @@ print_phase_header() {
 }
 
 print_phase_footer() {
-	echo "========================================================================="
+	echo "==========================================================================="
 }
 
 build_pkg() {
@@ -1244,6 +1544,9 @@ build_pkg() {
 	local log=$(log_path)
 	local ignore
 	local zip_log=0
+	local errortype
+
+	trap '' SIGTSTP
 
 	export PKGNAME="${pkgname}" # set ASAP so cleanup() can use it
 	port=$(cache_get_origin ${pkgname})
@@ -1258,15 +1561,21 @@ build_pkg() {
 		mount -t tmpfs tmpfs ${mnt}/${LOCALBASE:-/usr/local}
 	fi
 
+	case " ${BLACKLIST} " in
+	*\ ${port}\ *) ignore="Blacklisted" ;;
+	esac
 	# If this port is IGNORED, skip it
 	# This is checked here instead of when building the queue
 	# as the list may start big but become very small, so here
 	# is a less-common check
-	ignore="$(injail make -C ${portdir} -VIGNORE)"
+	: ${ignore:=$(injail make -C ${portdir} -VIGNORE)}
 
 	log_start
 	msg "Building ${port}"
 	buildlog_start ${portdir}
+
+	# Ensure /dev/null exists (kern/139014)
+	[ ${JAILED} -eq 0 ] && devfs -m ${mnt}/dev rule apply path null unhide
 
 	if [ -n "${ignore}" ]; then
 		msg "Ignoring ${port}: ${ignore}"
@@ -1294,11 +1603,14 @@ build_pkg() {
 			job_msg "Finished ${port}: Success"
 			run_hook pkgbuild success "${port}" "${PKGNAME}"
 			# Cache information for next run
-			pkg_cache_data "${POUDRIERE_DATA}/packages/${MASTERNAME}/All/${PKGNAME}.${PKG_EXT}" ${port} || :
+			pkg_cache_data "${PACKAGES}/All/${PKGNAME}.${PKG_EXT}" ${port} || :
 		else
 			# Symlink the buildlog into errors/
 			ln -s ../${PKGNAME}.log ${log}/logs/errors/${PKGNAME}.log
-			badd ports.failed "${port} ${PKGNAME} ${failed_phase}"
+			errortype=$(${SCRIPTPREFIX}/processonelog.sh \
+				${log}/logs/errors/${PKGNAME}.log \
+				2> /dev/null)
+			badd ports.failed "${port} ${PKGNAME} ${failed_phase} ${errortype}"
 			echo "${port} ${failed_phase}" >> $(log_path)/last_run.failed
 			job_msg "Finished ${port}: Failed: ${failed_phase}"
 			run_hook pkgbuild failed "${port}" "${PKGNAME}" "${failed_phase}" \
@@ -1328,7 +1640,7 @@ stop_build() {
 	local mnt=$(my_path)
 
 	umount -f ${mnt}/new_packages 2>/dev/null || :
-	rm -rf "${POUDRIERE_DATA}/packages/${MASTERNAME}/.new_packages/${PKGNAME}"
+	rm -rf "${PACKAGES}/.new_packages/${PKGNAME}"
 
 	# 2 = HEADER+ps itself
 	if [ $(injail ps aux | wc -l) -ne 2 ]; then
@@ -1347,13 +1659,10 @@ stop_build() {
 mangle_stderr() {
 	local msg_type="$1"
 	local extra="$2"
-	local xtrace=0
+	local - # Make `set +x` local
 
 	shift 2
 
-	# Must always disable xtrace here or it gets confused
-	# Subshell not used as this code is called a LOT in compute/list_deps
-	case $- in *x*) xtrace=1;; esac
 	set +x
 
 	{
@@ -1368,8 +1677,6 @@ mangle_stderr() {
 					'{print msg_type, extra ":", $0}' 1>&3
 		} 3>&2 2>&1
 	}
-
-	[ $xtrace -eq 1 ] && set -x
 }
 
 list_deps() {
@@ -1385,14 +1692,14 @@ list_deps() {
 
 deps_file() {
 	[ $# -ne 1 ] && eargs pkg
-	local pkg=$1
-	local depfile=$(pkg_cache_dir ${pkg})/deps
+	local pkg="$1"
+	local depfile="$(pkg_cache_dir "${pkg}")/deps"
 
 	if [ ! -f "${depfile}" ]; then
 		if [ "${PKG_EXT}" = "tbz" ]; then
-			tar -qxf "${pkg}" -O +CONTENTS | awk '$1 == "@pkgdep" { print $2 }' > "${depfile}"
+			injail tar -qxf "/packages/All/${pkg##*/}" -O +CONTENTS | awk '$1 == "@pkgdep" { print $2 }' > "${depfile}"
 		else
-			pkg info -qdF "${pkg}" > "${depfile}"
+			injail /poudriere/pkg-static info -qdF "/packages/All/${pkg##*/}" > "${depfile}"
 		fi
 	fi
 
@@ -1401,17 +1708,18 @@ deps_file() {
 
 pkg_get_origin() {
 	[ $# -lt 1 ] && eargs pkg
-	local pkg=$1
-	local originfile=$(pkg_cache_dir ${pkg})/origin
+	local pkg="$1"
+	local originfile="$(pkg_cache_dir "${pkg}")/origin"
 	local origin=$2
 
 	if [ ! -f "${originfile}" ]; then
 		if [ -z "${origin}" ]; then
 			if [ "${PKG_EXT}" = "tbz" ]; then
-				origin=$(tar -qxf "${pkg}" -O +CONTENTS | \
+				origin=$(injail tar -qxf "/packages/All/${pkg##*/}" -O +CONTENTS | \
 					awk -F: '$1 == "@comment ORIGIN" { print $2 }')
 			else
-				origin=$(pkg query -F "${pkg}" "%o")
+				origin=$(injail /poudriere/pkg-static query -F \
+					"/packages/All/${pkg##*/}" "%o")
 			fi
 		fi
 		echo ${origin} > "${originfile}"
@@ -1423,16 +1731,17 @@ pkg_get_origin() {
 
 pkg_get_dep_origin() {
 	[ $# -ne 1 ] && eargs pkg
-	local pkg=$1
-	local dep_origin_file=$(pkg_cache_dir ${pkg})/dep_origin
+	local pkg="$1"
+	local dep_origin_file="$(pkg_cache_dir "${pkg}")/dep_origin"
 	local compiled_dep_origins
 
 	if [ ! -f "${dep_origin_file}" ]; then
 		if [ "${PKG_EXT}" = "tbz" ]; then
-			compiled_dep_origins=$(tar -qxf "${pkg}" -O +CONTENTS | \
+			compiled_dep_origins=$(injail tar -qxf "/packages/All/${pkg##*/}" -O +CONTENTS | \
 				awk -F: '$1 == "@comment DEPORIGIN" {print $2}' | tr '\n' ' ')
 		else
-			compiled_dep_origins=$(pkg query -F "${pkg}" '%do' | tr '\n' ' ')
+			compiled_dep_origins=$(injail /poudriere/pkg-static query -F \
+				"/packages/All/${pkg##*/}" '%do' | tr '\n' ' ')
 		fi
 		echo "${compiled_dep_origins}" > "${dep_origin_file}"
 		echo "${compiled_dep_origins}"
@@ -1444,18 +1753,18 @@ pkg_get_dep_origin() {
 
 pkg_get_options() {
 	[ $# -ne 1 ] && eargs pkg
-	local pkg=$1
-	local optionsfile=$(pkg_cache_dir ${pkg})/options
+	local pkg="$1"
+	local optionsfile="$(pkg_cache_dir "${pkg}")/options"
 	local compiled_options
 
 	if [ ! -f "${optionsfile}" ]; then
 		if [ "${PKG_EXT}" = "tbz" ]; then
-			compiled_options=$(tar -qxf "${pkg}" -O +CONTENTS | \
+			compiled_options=$(injail tar -qxf "/packages/All/${pkg##*/}" -O +CONTENTS | \
 				awk -F: '$1 == "@comment OPTIONS" {print $2}' | tr ' ' '\n' | \
 				sed -n 's/^\+\(.*\)/\1/p' | sort | tr '\n' ' ')
 		else
-			compiled_options=$(pkg query -F "${pkg}" '%Ov %Ok' | \
-				awk '$1 == "on" {print $2}' | sort | tr '\n' ' ')
+			compiled_options=$(injail /poudriere/pkg-static query -F \
+				"/packages/All/${pkg##*/}" '%Ov%Ok' | sed '/^off/d;s/^on//' | sort | tr '\n' ' ')
 		fi
 		echo "${compiled_options}" > "${optionsfile}"
 		echo "${compiled_options}"
@@ -1465,29 +1774,33 @@ pkg_get_options() {
 	cat "${optionsfile}"
 }
 
+ensure_pkg_installed() {
+	local mnt=$(my_path)
+
+	[ ${PKGNG} -eq 1 ] || return 0
+	[ -x ${mnt}/poudriere/pkg-static ] && return 0
+	[ -e ${MASTERMNT}/packages/Latest/pkg.txz ] || return 1 #pkg missing
+	injail tar xf /packages/Latest/pkg.txz -C / \
+		-s ",/.*/,poudriere/,g" "*/pkg-static"
+	return 0
+}
+
 pkg_cache_data() {
 	[ $# -ne 2 ] && eargs pkg origin
 	# Ignore errors in here
 	set +e
-	local pkg=$1
+	local pkg="$1"
 	local origin=$2
-	local cachedir=$(pkg_cache_dir ${pkg})
-	local originfile=${cachedir}/origin
+	local cachedir="$(pkg_cache_dir "${pkg}")"
+	local originfile="${cachedir}/origin"
 
-	mkdir -p $(pkg_cache_dir ${pkg})
-	pkg_get_options ${pkg} > /dev/null
-	pkg_get_origin ${pkg} ${origin} > /dev/null
-	pkg_get_dep_origin ${pkg} > /dev/null
-	deps_file ${pkg} > /dev/null
+	ensure_pkg_installed
+	mkdir -p "$(pkg_cache_dir "${pkg}")"
+	pkg_get_options "${pkg}" > /dev/null
+	pkg_get_origin "${pkg}" ${origin} > /dev/null
+	pkg_get_dep_origin "${pkg}" > /dev/null
+	deps_file "${pkg}" > /dev/null
 	set -e
-}
-
-pkg_to_pkgname() {
-	[ $# -ne 1 ] && eargs pkg
-	local pkg=$1
-	local pkg_file=${pkg##*/}
-	local pkgname=${pkg_file%.*}
-	echo ${pkgname}
 }
 
 cache_dir() {
@@ -1498,59 +1811,67 @@ cache_dir() {
 # @param string pkg $PKGDIR/All/PKGNAME.PKG_EXT
 pkg_cache_dir() {
 	[ $# -ne 1 ] && eargs pkg
-	local pkg=$1
-	local pkg_file=${pkg##*/}
+	local pkg="$1"
+	local pkg_file="${pkg##*/}"
+	local pkg_dir
 
-	echo $(cache_dir)/${pkg_file}
+	pkg_dir="$(cache_dir)/${pkg_file}"
+
+	[ -d "${pkg_dir}" ] || mkdir -p "${pkg_dir}"
+
+	echo "${pkg_dir}"
 }
 
 clear_pkg_cache() {
 	[ $# -ne 1 ] && eargs pkg
-	local pkg=$1
+	local pkg="$1"
 
-	rm -fr $(pkg_cache_dir ${pkg})
+	rm -fr "$(pkg_cache_dir "${pkg}")"
 }
 
 delete_pkg() {
 	[ $# -ne 1 ] && eargs pkg
-	local pkg=$1
+	local pkg="$1"
 
 	# Delete the package and the depsfile since this package is being deleted,
 	# which will force it to be recreated
 	rm -f "${pkg}"
-	clear_pkg_cache ${pkg}
+	clear_pkg_cache "${pkg}"
 }
 
 # Deleted cached information for stale packages (manually removed)
 delete_stale_pkg_cache() {
 	local pkgname
 	local cachedir=$(cache_dir)
+
+	msg_verbose "Checking for stale cache files"
+
 	[ ! -d ${cachedir} ] && return 0
 	dirempty ${cachedir} && return 0
 	for pkg in ${cachedir}/*.${PKG_EXT}; do
-		pkg_file=${pkg##*/}
+		pkg_file="${pkg##*/}"
 		# If this package no longer exists in the PKGDIR, delete the cache.
-		[ ! -e "${POUDRIERE_DATA}/packages/${MASTERNAME}/All/${pkg_file}" ] &&
-			clear_pkg_cache ${pkg}
+		[ ! -e "${PACKAGES}/All/${pkg_file}" ] &&
+			clear_pkg_cache "${pkg}"
 	done
 
 	return 0
 }
 
 delete_old_pkg() {
+	[ $# -eq 2 ] || eargs pkgname origin
 	local pkg="$1"
+	local o="$2"
 	local mnt=$(my_path)
-	local o v v2 compiled_options current_options current_deps compiled_deps
-	if [ "${pkg##*/}" = "repo.txz" ]; then
-		msg "Removing invalid pkg repo file: ${pkg}"
-		rm -f ${pkg}
+	local v v2 compiled_options current_options current_deps compiled_deps
+
+	if [ ! -d "${mnt}/usr/ports/${o}" ]; then
+		msg "${o} does not exist anymore. Deleting stale ${pkg##*/}"
+		delete_pkg "${pkg}"
 		return 0
 	fi
 
-	mkdir -p $(pkg_cache_dir ${pkg})
-
-	o=$(pkg_get_origin ${pkg})
-	v=${pkg##*-}
+	v="${pkg##*-}"
 	v=${v%.*}
 	if [ ! -d "${mnt}${PORTSRC}/${o}" ]; then
 		msg "${o} does not exist anymore. Deleting stale ${pkg##*/}"
@@ -1561,33 +1882,83 @@ delete_old_pkg() {
 	v2=${v2##*-}
 	if [ "$v" != "$v2" ]; then
 		msg "Deleting old version: ${pkg##*/}"
-		delete_pkg ${pkg}
+		delete_pkg "${pkg}"
 		return 0
 	fi
 
 	# Detect ports that have new dependencies that the existing packages
 	# do not have and delete them.
 	if [ "${CHECK_CHANGED_DEPS:-yes}" != "no" ]; then
-		current_deps=$(injail make -C ${PORTSRC}/${o} run-depends-list | \
-			sed "s,${PORTSRC}/,,g" | tr '\n' ' ')
-		compiled_deps=$(pkg_get_dep_origin ${pkg})
+		current_deps=""
+		liblist=""
+		# FIXME: Move into Infrastructure/scripts and 
+		# 'make actual-run-depends-list' after enough testing,
+		# which will avoida all of the injail hacks
+
+		for td in LIB RUN; do
+			raw_deps=$(injail make -C /usr/ports/${o} -V${td}_DEPENDS)
+			for d in ${raw_deps}; do
+				key=${d%:*}
+				dpath=${d#*:/usr/ports/}
+				case ${td} in
+				LIB)
+					[ -n "${liblist}" ] || liblist=$(injail ldconfig -r | awk '$1 ~ /:-l/ { gsub(/.*-l/, "", $1); printf("%s ",$1) } END { printf("\n") }')
+					case ${key} in
+					lib*)
+						unset found
+						for dir in /lib /usr/lib ; do
+							if injail test -f "${dir}/${key}"; then
+								found=yes
+								break;
+							fi
+						done
+						[ -n "${found}" ] || current_deps="${current_deps} ${dpath}"
+						;;
+					*.*)
+						case " ${liblist} " in
+							*\ ${key}\ *) ;;
+							*) current_deps="${current_deps} ${dpath}" ;;
+						esac
+						;;
+					*)
+						unset found
+						for dir in /lib /usr/lib ; do
+							if injail test -f "${dir}/lib${key}.so"; then
+								found=yes
+								break;
+							fi
+						done
+						[ -n "${found}" ] || current_deps="${current_deps} ${dpath}"
+						;;
+					esac
+					;;
+				RUN)
+					case $key in
+					/*) [ -e ${mnt}/${key} ] || current_deps="${current_deps} ${dpath}" ;;
+					*) [ -n "$(injail which ${key})" ] || current_deps="${current_deps} ${dpath}" ;;
+					esac
+					;;
+				esac
+			done
+		done
+		compiled_deps=$(pkg_get_dep_origin "${pkg}")
 		for d in ${current_deps}; do
 			case " $compiled_deps " in
 			*\ $d\ *) ;;
 			*)
 				msg "Deleting ${pkg##*/}: new dependency: ${d}"
-				delete_pkg ${pkg}
+				delete_pkg "${pkg}"
 				return 0
 				;;
 			esac
 		done
 	fi
 
-	# Check if the compiled options match the current options from make.conf and /var/db/options
+	# Check if the compiled options match the current options from make.conf and /var/db/ports
 	if [ "${CHECK_CHANGED_OPTIONS:-verbose}" != "no" ]; then
 		current_options=$(injail make -C ${PORTSRC}/${o} pretty-print-config | \
 			tr ' ' '\n' | sed -n 's/^\+\(.*\)/\1/p' | sort | tr '\n' ' ')
-		compiled_options=$(pkg_get_options ${pkg})
+		compiled_options=$(pkg_get_options "${pkg}")
 
 		if [ "${compiled_options}" != "${current_options}" ]; then
 			msg "Options changed, deleting: ${pkg##*/}"
@@ -1595,20 +1966,24 @@ delete_old_pkg() {
 				msg "Pkg: ${compiled_options}"
 				msg "New: ${current_options}"
 			fi
-			delete_pkg ${pkg}
+			delete_pkg "${pkg}"
 			return 0
 		fi
 	fi
 }
 
 delete_old_pkgs() {
-	[ ! -d ${POUDRIERE_DATA}/packages/${MASTERNAME}/All ] && return 0
-	dirempty ${POUDRIERE_DATA}/packages/${MASTERNAME}/All && return 0
+	local origin
+
+	msg_verbose "Checking packages for incremental rebuild needed"
+
+	package_dir_exists_and_has_packages || return 0
+
 	parallel_start
-	for pkg in ${POUDRIERE_DATA}/packages/${MASTERNAME}/All/*.${PKG_EXT}; do
-		# Check for non-empty directory with no packages in it
-		[ "${pkg}" = "${POUDRIERE_DATA}/packages/${MASTERNAME}/All/*.${PKG_EXT}" ] && break
-		parallel_run delete_old_pkg "${pkg}"
+	for pkg in ${PACKAGES}/All/*.${PKG_EXT}; do
+		origin=$(pkg_get_origin "${pkg}")
+		port_is_needed "${origin}" || continue
+		parallel_run delete_old_pkg "${pkg}" "${origin}"
 	done
 	parallel_stop
 }
@@ -1662,6 +2037,7 @@ cache_get_pkgname() {
 			err 1 "Invalid port origin '${origin}' not found."
 		pkgname=$(injail make -C ${PORTSRC}/${origin} -VPKGNAME ||
 			err 1 "Error getting PKGNAME for ${origin}")
+		[ -n "${pkgname}" ] || err 1 "Missing PKGNAME for ${origin}"
 		# Make sure this origin did not already exist
 		existing_origin=$(cache_get_origin "${pkgname}" 2>/dev/null || :)
 		# It may already exist due to race conditions, it is not harmful. Just ignore.
@@ -1711,10 +2087,12 @@ compute_deps() {
 		[ ${ALL:-0} -eq 0 ] && ! [ -d "${MASTERMNT}/poudriere/deps/${dep_pkgname}" ] &&
 			compute_deps "${dep_port}" "${dep_pkgname}"
 
-		touch "${pkg_pooldir}/${dep_pkgname}"
+		:> "${pkg_pooldir}/${dep_pkgname}"
 		mkdir -p "${MASTERMNT}/poudriere/rdeps/${dep_pkgname}"
 		ln -sf "${pkg_pooldir}/${dep_pkgname}" \
 			"${MASTERMNT}/poudriere/rdeps/${dep_pkgname}/${pkgname}"
+		echo "${port} ${dep_port}" >> \
+			${MASTERMNT}/poudriere/port_deps.unsorted
 	done
 }
 
@@ -1735,13 +2113,71 @@ listed_ports() {
 	fi
 }
 
+# Port was requested to be built
+port_is_listed() {
+	[ $# -eq 1 ] || eargs origin
+	local origin="$1"
+
+	if [ ${ALL:-0} -eq 1 -o ${PORTTESTING_RECURSIVE:-0} -eq 1 ]; then
+		return 0
+	fi
+
+	listed_ports | grep -q "^${origin}\$" && return 0
+
+	return 1
+}
+
+# Port was requested to be built, or is needed by a port requested to be built
+port_is_needed() {
+	[ $# -eq 1 ] || eargs origin
+	local origin="$1"
+
+	[ ${ALL:-0} -eq 1 ] && return 0
+
+	awk -vorigin="${origin}" '
+	    $1 == origin || $2 == origin { found=1; exit 0 }
+	    END { if (found != 1) exit 1 }' "${MASTERMNT}/poudriere/port_deps"
+}
+
+get_porttesting() {
+	[ $# -eq 1 ] || eargs pkgname
+	local pkgname="$1"
+	local porttesting
+
+	if [ -n "${PORTTESTING}" ] && port_is_listed \
+		$(cache_get_origin "${pkgname}"); then
+		porttesting=1
+	else
+		porttesting=
+	fi
+
+	echo $porttesting
+}
+
 parallel_exec() {
 	local cmd="$1"
 	local ret=0
+	local - # Make `set +e` local
+	local errexit=0
 	shift 1
-	${cmd} "$@" || ret=1
+
+	# Disable -e so that the actual execution failing does not
+	# return early and prevent notifying the FIFO that the
+	# exec is done
+	case $- in *e*) errexit=1;; esac
+	set +e
+	(
+		# Do still cause the actual command to return
+		# non-zero if it has any failures, if caller
+		# was set -e as well. Using 'if cmd' or 'cmd || '
+		# here would disable set -e in the cmd execution
+		[ $errexit -eq 1 ] && set -e
+		${cmd} "$@"
+	)
+	ret=$?
 	echo >&6 || :
 	exit ${ret}
+	# set -e will be restored by 'local -'
 }
 
 parallel_start() {
@@ -1757,9 +2193,36 @@ parallel_start() {
 	rm -f ${fifo}
 	export NBPARALLEL=0
 	export PARALLEL_PIDS=""
+	_SHOULD_REAP=0
 }
 
+# For all running children, look for dead ones, collect their status, error out
+# if any have non-zero return, and then remove them from the PARALLEL_PIDS
+# list.
+_reap_children() {
+	local pid
+	for pid in ${PARALLEL_PIDS}; do
+		# Check if this pid is still alive
+		if ! kill -0 ${pid} 2>/dev/null; then
+			# This will error out if the return status is non-zero
+			_wait ${pid}
+			# Remove pid from PARALLEL_PIDS and strip away all
+			# spaces
+			PARALLEL_PIDS_L=${PARALLEL_PIDS%% ${pid} *}
+			PARALLEL_PIDS_L=${PARALLEL_PIDS_L% }
+			PARALLEL_PIDS_L=${PARALLEL_PIDS_L# }
+			PARALLEL_PIDS_R=${PARALLEL_PIDS##* ${pid} }
+			PARALLEL_PIDS_R=${PARALLEL_PIDS_R% }
+			PARALLEL_PIDS_R=${PARALLEL_PIDS_R# }
+			PARALLEL_PIDS=" ${PARALLEL_PIDS_L} ${PARALLEL_PIDS_R} "
+		fi
+	done
+}
+
+# Wait on all remaining running processes and clean them up. Error out if
+# any have non-zero return status.
 parallel_stop() {
+	pwait ${PARALLEL_PIDS} 2>/dev/null || :
 	for pid in ${PARALLEL_PIDS}; do
 		# This will read the return code of each child
 		# and properly error out if the children errored
@@ -1769,6 +2232,13 @@ parallel_stop() {
 	exec 6<&-
 	exec 6>&-
 	unset PARALLEL_PIDS
+	unset NBPARALLEL
+}
+
+parallel_shutdown() {
+	# Kill all children instead of waiting on them
+	[ -n "${PARALLEL_PIDS}" ] && kill -9 ${PARALLEL_PIDS} 2>/dev/null || :
+	parallel_stop 2>/dev/null || :
 }
 
 parallel_run() {
@@ -1779,33 +2249,17 @@ parallel_run() {
 		unset a; until trappedinfo=; read a <&6 || [ -z "$trappedinfo" ]; do :; done
 	fi
 	[ ${NBPARALLEL} -lt ${PARALLEL_JOBS} ] && NBPARALLEL=$((NBPARALLEL + 1))
-
-	parallel_exec $cmd "$@" &
-	PARALLEL_PIDS="${PARALLEL_PIDS} $!"
-}
-
-# Get all data that make this build env unique,
-# so if the same build is done again,
-# we can use the some of the same cached data
-cache_get_key() {
-	if [ -z "${CACHE_KEY}" ]; then
-		CACHE_KEY=$({
-			injail env
-			cat ${MASTERMNT}/etc/make.conf
-			injail find /var/db/ports -exec sha256 {} +
-			echo ${MASTERNAME}
-			if [ -f ${MASTERMNT}/${PORTSRC}/poudriere.stamp ]; then
-				cat ${MASTERMNT}/${PORTSRC}/poudriere.stamp
-			else
-				# This is not a poudriere-managed ports tree.
-				# Just toss in getpid() to invalidate the cache
-				# as there is no quick way to hash the tree without
-				# taking possibly minutes+
-				echo $$
-			fi
-		} | sha256)
+	# Occasionally reap dead children. Don't do this too often or it
+	# becomes a bottleneck. Do it too infrequently and there is a risk
+	# of PID reuse/collision
+	_SHOULD_REAP=$((_SHOULD_REAP + 1))
+	if [ ${_SHOULD_REAP} -eq 16 ]; then
+		_reap_children
+		_SHOULD_REAP=0
 	fi
-	echo ${CACHE_KEY}
+
+	PARALLEL_CHILD=1 parallel_exec $cmd "$@" &
+	PARALLEL_PIDS="${PARALLEL_PIDS} $! "
 }
 
 find_all_pool_references() {
@@ -1825,6 +2279,16 @@ find_all_pool_references() {
 		done
 		echo "${MASTERMNT}/poudriere/rdeps/${pkgname}"
 	fi
+}
+
+delete_stale_symlinks_and_empty_dirs() {
+	msg "Deleting stale symlinks"
+	find -L ${PACKAGES} -type l \
+		-exec rm -f {} +
+
+	msg "Deleting empty directories"
+	find ${PACKAGES} -type d -mindepth 1 \
+		-empty -delete
 }
 
 prepare_ports() {
@@ -1857,12 +2321,32 @@ prepare_ports() {
 	POOL_BUCKET_DIRS="${POOL_BUCKET_DIRS} ${MASTERMNT}/poudriere/pool/unbalanced"
 	mkdir -p ${POOL_BUCKET_DIRS}
 
-	mkdir -p ${log}/../../latest-per-pkg ${log}/../latest-per-pkg
-	mkdir -p ${log}/logs ${log}/logs/errors
-	ln -sfh ${BUILDNAME} ${log%/*}/latest
-	cp ${HTMLPREFIX}/* ${log}
+	if was_a_bulk_run; then
+		mkdir -p ${log}/../../latest-per-pkg ${log}/../latest-per-pkg
+		mkdir -p ${log}/logs ${log}/logs/errors ${log}/assets
+		mkdir -p $(cache_dir)
+		ln -sfh ${BUILDNAME} ${log%/*}/latest
+		cp ${HTMLPREFIX}/index.html ${log}
+		cp -R ${HTMLPREFIX}/assets/ ${log}/assets/
 
-	bset status "computingdeps:"
+		# Record the SVN URL@REV in the build
+		[ -d ${MASTERMNT}/usr/ports/.svn ] && bset svn_url $(
+			${SVN_CMD} info ${MASTERMNT}/usr/ports | awk '
+				/^URL: / {URL=substr($0, 6)}
+				/Revision: / {REVISION=substr($0, 11)}
+				END { print URL "@" REVISION }
+			')
+
+		bset mastername "${MASTERNAME}"
+		bset jailname "${JAILNAME}"
+		bset setname "${SETNAME}"
+		bset ptname "${PTNAME}"
+		bset buildname "${BUILDNAME}"
+
+		bset status "computingdeps:"
+	fi
+
+	:> "${MASTERMNT}/poudriere/port_deps.unsorted"
 	parallel_start
 	for port in $(listed_ports); do
 		[ -d "${MASTERMNT}${PORTSRC}/${port}" ] ||
@@ -1871,54 +2355,80 @@ prepare_ports() {
 	done
 	parallel_stop
 
+	sort -u "${MASTERMNT}/poudriere/port_deps.unsorted" > \
+		"${MASTERMNT}/poudriere/port_deps"
+	rm -f "${MASTERMNT}/poudriere/port_deps.unsorted"
+
 	bset status "sanity:"
 
-	if [ ${CLEAN_LISTED:-0} -eq 1 ]; then
-		listed_ports | while read port; do
-			pkg="${POUDRIERE_DATA}/packages/${MASTERNAME}/All/$(cache_get_pkgname ${port}).${PKG_EXT}"
-			if [ -f "${pkg}" ]; then
-				msg "Deleting existing package: ${pkg##*/}"
-				delete_pkg ${pkg}
-			fi
-		done
+	if was_a_bulk_run; then
+		if [ ${CLEAN_LISTED:-0} -eq 1 ]; then
+			listed_ports | while read port; do
+				pkg="${PACKAGES}/All/$(cache_get_pkgname ${port}).${PKG_EXT}"
+				if [ -f "${pkg}" ]; then
+					msg "Deleting existing package: ${pkg##*/}"
+					delete_pkg "${pkg}"
+				fi
+			done
+		fi
+
+		# If the build dir already exists, it is being resumed and any
+		# packages already built/failed/skipped/ignored should not
+		# be rebuilt
+		if [ -e ${log}/.poudriere.ports.built ]; then
+			resuming_build=1
+			awk '{print $2}' \
+				${log}/.poudriere.ports.built \
+				${log}/.poudriere.ports.failed \
+				${log}/.poudriere.ports.ignored \
+				${log}/.poudriere.ports.skipped | \
+			while read pn; do
+				find_all_pool_references "${pn}"
+			done | xargs rm -rf
+		else
+			# New build
+			resuming_build=0
+			bset stats_queued 0
+			bset stats_built 0
+			bset stats_failed 0
+			bset stats_ignored 0
+			bset stats_skipped 0
+			:> ${log}/.data.json
+			:> ${log}/.data.mini.json
+			:> ${log}/.poudriere.ports.built
+			:> ${log}/.poudriere.ports.failed
+			:> ${log}/.poudriere.ports.ignored
+			:> ${log}/.poudriere.ports.skipped
+		fi
 	fi
 
-	# If the build dir already exists, it is being resumed and any
-	# packages already built/failed/skipped/ignored should not
-	# be rebuilt
-	if [ -e ${log}/.poudriere.ports.built ]; then
-		resuming_build=1
-		awk '{print $2}' \
-			${log}/.poudriere.ports.built \
-			${log}/.poudriere.ports.failed \
-			${log}/.poudriere.ports.ignored \
-			${log}/.poudriere.ports.skipped | \
-		while read pn; do
-			find_all_pool_references "${pn}"
-		done | xargs rm -rf
-	else
-		# New build
-		resuming_build=0
-		bset stats_queued 0
-		bset stats_built 0
-		bset stats_failed 0
-		bset stats_ignored 0
-		bset stats_skipped 0
-		:> ${log}/.data.json
-		:> ${log}/.poudriere.ports.built
-		:> ${log}/.poudriere.ports.failed
-		:> ${log}/.poudriere.ports.ignored
-		:> ${log}/.poudriere.ports.skipped
+	if ! ensure_pkg_installed && [ ${SKIPSANITY} -eq 0 ]; then
+		msg "pkg package missing, skipping sanity"
+		SKIPSANITY=1
 	fi
 
 	if [ $SKIPSANITY -eq 0 ]; then
 		msg "Sanity checking the repository"
-		delete_stale_pkg_cache
-		delete_old_pkgs
 
-		while :; do
-			sanity_check_pkgs && break
-		done
+		pkg="${PACKAGES}/All/repo.txz"
+		if [ -f "${pkg}" ]; then
+			msg "Removing invalid pkg repo file: ${pkg}"
+			rm -f "${pkg}"
+		fi
+
+		delete_stale_pkg_cache
+
+		# Skip incremental build for pkgclean
+		if was_a_bulk_run; then
+			delete_old_pkgs
+
+			msg_verbose "Checking packages for missing dependencies"
+			while :; do
+				sanity_check_pkgs && break
+			done
+
+			delete_stale_symlinks_and_empty_dirs
+		fi
 	fi
 
 	msg "Deleting stale symlinks"
@@ -1941,7 +2451,7 @@ prepare_ports() {
 	# Call the deadlock code as non-fatal which will check for cycles
 	deadlock_detected 0
 
-	if [ $resuming_build -eq 0 ]; then
+	if was_a_bulk_run && [ $resuming_build -eq 0 ]; then
 		nbq=0
 		nbq=$(find ${MASTERMNT}/poudriere/deps -type d -depth 1 | wc -l)
 		bset stats_queued ${nbq##* }
@@ -1994,15 +2504,124 @@ balance_pool() {
 	rmdir ${lock}
 }
 
+append_make() {
+	[ $# -ne 2 ] && eargs src_makeconf dst_makeconf
+	local src_makeconf=$1
+	local dst_makeconf=$2
+
+	if [ "${src_makeconf}" = "-" ]; then
+		src_makeconf="${POUDRIERED}/make.conf"
+	else
+		src_makeconf="${POUDRIERED}/${src_makeconf}-make.conf"
+	fi
+
+	[ -f "${src_makeconf}" ] || return 0
+	src_makeconf="$(realpath ${src_makeconf} 2>/dev/null)"
+	msg "Appending to make.conf: ${src_makeconf}"
+	echo "#### ${src_makeconf} ####" >> ${dst_makeconf}
+	cat "${src_makeconf}" >> ${dst_makeconf}
+}
+
+read_packages_from_params()
+{
+	if [ $# -eq 0 ]; then
+		[ -n "${LISTPKGS}" -o ${ALL} -eq 1 ] ||
+		    err 1 "No packages specified"
+		if [ ${ALL} -eq 0 ]; then
+			for listpkg_name in ${LISTPKGS}; do
+				[ -f "${listpkg_name}" ] ||
+				    err 1 "No such list of packages: ${listpkg_name}"
+			done
+		fi
+	else
+		[ ${ALL} -eq 0 ] ||
+		    err 1 "command line arguments and -a cannot be used at the same time"
+		[ -z "${LISTPKGS}" ] ||
+		    err 1 "command line arguments and list of ports cannot be used at the same time"
+		LISTPORTS="$@"
+	fi
+}
+
+clean_restricted() {
+	msg "Cleaning restricted packages"
+	bset status "clean_restricted:"
+	# Remount rw
+	# mount_nullfs does not support mount -u
+	umount ${MASTERMNT}/packages
+	mount_packages
+	injail make -C /usr/ports -j ${PARALLEL_JOBS} clean-restricted >/dev/null
+	# Remount ro
+	umount ${MASTERMNT}/packages
+	mount_packages -o ro
+}
+
+build_repo() {
+	if [ $PKGNG -eq 1 ]; then
+		msg "Creating pkgng repository"
+		bset status "pkgrepo:"
+		ensure_pkg_installed
+		rm -f ${PACKAGES}/repo.txz \
+			${PACKAGES}/repo.sqlite
+		# remount rw
+		umount ${MASTERMNT}/packages
+		mount_packages
+		if [ -f "${PKG_REPO_SIGNING_KEY:-/nonexistent}" ]; then
+			install -m 0400 ${PKG_REPO_SIGNING_KEY} \
+				${MASTERMNT}/tmp/repo.key
+			### XXX: Update pkg-repo to support -o
+			### so that /packages can remain RO
+			injail /poudriere/pkg-static repo /packages \
+				/tmp/repo.key
+			rm -f ${MASTERMNT}/tmp/repo.key
+		else
+			injail /poudriere/pkg-static repo /packages
+		fi
+		# Remount ro
+		umount ${MASTERMNT}/packages
+		mount_packages -o ro
+	else
+		msg "Preparing INDEX"
+		bset status "index:"
+		OSMAJ=`injail uname -r | awk -F. '{ print $1 }'`
+		INDEXF=${PACKAGES}/INDEX-${OSMAJ}
+		INDEXF_JAIL=$(mktemp -u /tmp/index.XXXXXX)
+		rm -f ${INDEXF}.1 2>/dev/null || :
+		for pkg_file in ${PACKAGES}/All/*.tbz; do
+			# Check for non-empty directory with no packages in it
+			[ "${pkg}" = "${PACKAGES}/All/*.tbz" ] && break
+			ORIGIN=$(pkg_get_origin ${pkg_file})
+			msg_verbose "Extracting description for ${ORIGIN} ..."
+			[ -d ${MASTERMNT}/usr/ports/${ORIGIN} ] &&
+				injail make -C /usr/ports/${ORIGIN} describe >> ${INDEXF}.1
+		done
+
+		msg_n "Generating INDEX..."
+		# Move temp INDEX file into the jail. make_index will jail_attach()
+		# to the specified jail
+		mv ${INDEXF}.1 ${MASTERMNT}${INDEXF_JAIL}.1
+		make_index -j ${MASTERNAME} ${INDEXF_JAIL}.1 ${INDEXF_JAIL}
+		mv ${MASTERMNT}${INDEXF_JAIL} ${INDEXF}
+		echo " done"
+
+		[ -f ${INDEXF}.bz2 ] && rm ${INDEXF}.bz2
+		msg_n "Compressing INDEX-${OSMAJ}..."
+		bzip2 -9 ${INDEXF}
+		echo " done"
+	fi
+}
+
+
 RESOLV_CONF=""
 STATUS=0 # out of jail #
 
-[ -f ${SCRIPTPREFIX}/../../etc/poudriere.conf ] ||
-	err 1 "Unable to find ${SCRIPTPREFIX}/../../etc/poudriere.conf"
+[ -z "${POUDRIERE_ETC}" ] &&
+    POUDRIERE_ETC=$(realpath ${SCRIPTPREFIX}/../../etc)
+[ -f ${POUDRIERE_ETC}/poudriere.conf ] ||
+	err 1 "Unable to find ${POUDRIERE_ETC}/poudriere.conf"
 
-. ${SCRIPTPREFIX}/../../etc/poudriere.conf
-POUDRIERED=${SCRIPTPREFIX}/../../etc/poudriere.d
-LIBEXECPREFIX=${SCRIPTPREFIX}/../../libexec/poudriere
+. ${POUDRIERE_ETC}/poudriere.conf
+POUDRIERED=${POUDRIERE_ETC}/poudriere.d
+LIBEXECPREFIX=$(realpath ${SCRIPTPREFIX}/../../libexec/poudriere)
 AWKPREFIX=${SCRIPTPREFIX}/awk
 HTMLPREFIX=${SCRIPTPREFIX}/html
 HOOKDIR=${POUDRIERED}/hooks
@@ -2016,7 +2635,9 @@ PATH="${LIBEXECPREFIX}:${PATH}"
 [ -z "${NO_ZFS}" -a -z ${ZPOOL} ] && err 1 "ZPOOL variable is not set"
 [ -z ${BASEFS} ] && err 1 "Please provide a BASEFS variable in your poudriere.conf"
 
-trap sig_handler SIGINT SIGTERM SIGKILL
+trap sigint_handler SIGINT
+trap sigterm_handler SIGTERM
+trap sig_handler SIGKILL
 trap exit_handler EXIT
 trap siginfo_handler SIGINFO
 
@@ -2025,7 +2646,7 @@ if [ -z "${NO_ZFS}" ]; then
 	zpool list ${ZPOOL} >/dev/null 2>&1 || err 1 "No such zpool: ${ZPOOL}"
 fi
 
-: ${SVN_HOST="svn.FreeBSD.org"}
+: ${SVN_HOST="svn0.us-west.freebsd.org"}
 : ${GIT_URL="git://github.com/freebsd/freebsd-ports.git"}
 : ${FREEBSD_HOST="http://ftp.FreeBSD.org"}
 if [ -z "${NO_ZFS}" ]; then
@@ -2044,7 +2665,6 @@ case "${WRKDIR_ARCHIVE_FORMAT}" in
 	*) err 1 "invalid format for WRKDIR_ARCHIVE_FORMAT: ${WRKDIR_ARCHIVE_FORMAT}" ;;
 esac
 
-
 case ${POOL_BUCKETS} in
 ''|*[!0-9]*)
 	POOL_BUCKETS=10
@@ -2053,7 +2673,16 @@ esac
 
 : ${WATCHDIR:=${POUDRIERE_DATA}/queue}
 : ${PIDFILE:=${POUDRIERE_DATA}/daemon.pid}
+: ${QUEUE_SOCKET:=/var/run/poudriered.sock}
+: ${PORTBUILD_USER:=nobody}
+: ${BUILD_AS_NON_ROOT:=no}
+: ${SVN_CMD:=$(which svn 2>/dev/null || which svnlite 2>/dev/null)}
+# 24 hours for 1 command
+: ${MAX_EXECUTION_TIME:=86400}
+# 120 minutes with no log update
+: ${NOHANG_TIME:=7200}
+: ${PATCHED_FS_KERNEL:=no}
 
-BUILDNAME=$(date +%Y-%m-%d_%H:%M:%S)
+BUILDNAME=$(date +%Y-%m-%d_%Hh%Mm%Ss)
 
 [ -d ${WATCHDIR} ] || mkdir -p ${WATCHDIR}

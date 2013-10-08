@@ -1,21 +1,12 @@
+SUBDIR=	make_index \
+	dirempty \
+	dirwatch \
+	cpdup
+
 PREFIX?=	/usr/local
+BINDIR=		${PREFIX}/libexec/poudriere
 
-all: dirwatch make_index dirempty
+beforeinstall:
+	mkdir -p ${DESTDIR}${BINDIR}
 
-dirempty: dirempty.c
-	${CC} -Wall -Werror ${CFLAGS} dirempty.c -o dirempty
-
-dirwatch: dirwatch.c
-	${CC} -Wall -Werror ${CFLAGS} dirwatch.c -o dirwatch
-
-make_index: make_index.c
-	${CC} -Wall -Werror ${CFLAGS} make_index.c -o make_index -lsbuf
-
-install: dirwatch make_index dirempty
-	mkdir -p ${PREFIX}/libexec/poudriere
-	install -m 755 -o root -g wheel dirwatch ${PREFIX}/libexec/poudriere
-	install -m 755 -o root -g wheel make_index ${PREFIX}/libexec/poudriere
-	install -m 755 -o root -g wheel dirempty ${PREFIX}/libexec/poudriere
-
-clean:
-	rm -f dirwatch make_index dirempty
+.include <bsd.subdir.mk>

@@ -28,22 +28,27 @@
 set -e
 
 usage() {
-	echo "poudriere testport [parameters] [options]
+	cat << EOF
+poudriere testport [parameters] [options]
 
 Parameters:
+    -j jailname -- Run inside the given jail
     -o origin   -- Specify an origin in the portstree
 
 Options:
     -c          -- Run make config for the given port
     -J n        -- Run n jobs in parallel for dependencies
-    -j name     -- Run inside the given jail
-    -i          -- Interactive mode. Enter jail for interactive testing and automatically cleanup when done.
-    -I          -- Advanced Interactive mode. Leaves jail running with port installed after test.
+    -i          -- Interactive mode. Enter jail for interactive testing and
+                   automatically cleanup when done.
+    -I          -- Advanced Interactive mode. Leaves jail running with port
+                   installed after test.
     -n          -- No custom prefix
     -p tree     -- Specify the path to the portstree
     -s          -- Skip sanity checks
-    -v          -- Be verbose; show more information. Use twice to enable debug output
-    -z set      -- Specify which SET to use"
+    -v          -- Be verbose; show more information. Use twice to enable
+                   debug output
+    -z set      -- Specify which SET to use
+EOF
 	exit 1
 }
 
@@ -82,6 +87,8 @@ while getopts "o:cnj:J:iIp:svz:" FLAG; do
 			INTERACTIVE_MODE=2
 			;;
 		p)
+			porttree_exists ${OPTARG} ||
+			    err 2 "No such ports tree ${OPTARG}"
 			PTNAME=${OPTARG}
 			;;
 		s)
@@ -101,8 +108,6 @@ while getopts "o:cnj:J:iIp:svz:" FLAG; do
 done
 
 [ -z ${ORIGIN} ] && usage
-
-export SKIPSANITY
 
 [ -z "${JAILNAME}" ] && err 1 "Don't know on which jail to run please specify -j"
 
@@ -126,7 +131,8 @@ log=$(log_path)
 run_hook test_port_start "${JAILNAME}" "${PTNAME}" "${MASTERMNT}${PORTSRC}/${ORIGIN}" \
 	`bget stats_queued`
 
-if ! POUDRIERE_BUILD_TYPE=bulk parallel_build ${JAILNAME} ${PTNAME} ${SETNAME} ; then
+POUDRIERE_BUILD_TYPE=bulk parallel_build ${JAILNAME} ${PTNAME} ${SETNAME}
+if [ $(bget stats_failed) -gt 0 ] || [ $(bget stats_skipped) -gt 0 ]; then
 	failed=$(bget ports.failed | awk '{print $1 ":" $3 }' | xargs echo)
 	skipped=$(bget ports.skipped | awk '{print $1}' | sort -u | xargs echo)
 	nbignored=$(bget stats_failed)
@@ -158,17 +164,19 @@ if [ "${USE_PORTLINT}" = "yes" ]; then
 	set -e
 fi
 [ ${NOPREFIX} -ne 1 ] && PREFIX="${BUILDROOT:-/prefix}/`echo ${PKGNAME} | tr '[,+]' _`"
-PORT_FLAGS="PREFIX=${PREFIX}"
+[ "${PREFIX}" != "${LOCALBASE}" ] && PORT_FLAGS="PREFIX=${PREFIX}"
 msg "Building with flags: ${PORT_FLAGS}"
 
-if [ -d ${MASTERMNT}${PREFIX} ]; then
+if [ -d ${MASTERMNT}${PREFIX} -a "${PREFIX}" != "/usr" ]; then
 	msg "Removing existing ${PREFIX}"
 	[ "${PREFIX}" != "${LOCALBASE}" ] && rm -rf ${MASTERMNT}${PREFIX}
 fi
 
 PKGENV="PACKAGES=/tmp/pkgs PKGREPOSITORY=/tmp/pkgs"
-mkdir -p ${MASTERMNT}/tmp/pkgs
+injail install -d -o ${PORTBUILD_USER} /tmp/pkgs
+[ ${PKGNG} -eq 0 ] && injail mkdir -p ${PREFIX}
 PORTTESTING=yes
+export TRYBROKEN=yes
 export DEVELOPER_MODE=yes
 log_start
 buildlog_start ${PORTSRC}/${ORIGIN}
@@ -182,7 +190,7 @@ if ! build_port ${PORTSRC}/${ORIGIN}; then
 
 	if [ ${INTERACTIVE_MODE} -eq 0 ]; then
 		stop_build ${PORTSRC}/${ORIGIN}
-		exit 1
+		err 1 "Build failed in phase: ${failed_phase}"
 	fi
 else
 	if [ -f ${MASTERMNT}/${PORTSRC}/${ORIGIN}/.keep ]; then
@@ -192,8 +200,10 @@ else
 	run_hook port_build_success "${JAILNAME}" "${PTNAME}" "${MASTERMNT}${PORTSRC}/${ORIGIN}"
 fi
 
-msg "Installing from package"
-injail ${PKG_ADD} /tmp/pkgs/${PKGNAME}.${PKG_EXT}
+if [ -f ${MASTERMNT}/tmp/pkgs/${PKGNAME}.${PKG_EXT} ]; then
+	msg "Installing from package"
+	injail ${PKG_ADD} /tmp/pkgs/${PKGNAME}.${PKG_EXT} || :
+fi
 
 # Interactive test mode
 if [ $INTERACTIVE_MODE -gt 0 ]; then
@@ -251,7 +261,6 @@ injail make -C ${PORTSRC}/${ORIGIN} clean
 msg "Deinstalling package"
 injail ${PKG_DELETE} ${PKGNAME}
 
-msg "Removing existing ${PREFIX} dir"
 stop_build ${PORTSRC}/${ORIGIN}
 
 cleanup

@@ -29,7 +29,7 @@ in order to make the builds in a VM resident filesystem.
 
 Just type "make install" at the top-level directory.
 
-<h1>What do I have to configure before starting use it?</h1>
+<h1>What do I need to configure before being able to start using it?</h1>
 
  <h2>Create a mandatory configuration file</h2>
 
@@ -57,6 +57,7 @@ See poudriere(8).
   *  [./ccache.wiki|...use ccache with poudriere]
   *  [./config.wiki|...easily generate options]
   *  [./use_system_ports_tree.wiki|...use the system ports tree in poudriere]
+  *  [./using_testport.wiki|...using testport to test ports]
 
 <h1>Hacking </h1>
 
@@ -68,6 +69,17 @@ and clone the repo:
 # mkdir poudriere
 # cd poudriere
 # fossil open ../poudriere.fossil</verbatim>
+
+There is also a git mirror available at https://github.com/bdrewery/poudriere
+
+<h2>Contributing</h2>
+
+Any of these options are available for contributing:
+
+  *  Open new ticket with patch attached
+  *  Post link to patch in #poudriere on freenode
+  *  Post patch to freebsd-pkg@FreeBSD.org
+  *  Send github Pull Request (not preferred, but still accepted)
 
 Happy FreeBSDing!
 

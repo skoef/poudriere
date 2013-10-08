@@ -27,7 +27,7 @@
 .\"
 .\" Note: The date here should be updated whenever a non-trivial
 .\" change is made to the manual page.
-.Dd May 16, 2013
+.Dd September 21, 2013
 .Dt POUDRIERE 8
 .Os FreeBSD
 .Sh NAME
@@ -43,6 +43,18 @@ The
 .Nm
 tool is used to build packages from the ports tree.
 It can also be used to test a single port.
+.Sh GLOBAL OPTIONS
+.Nm
+accepts a global option:
+.Bl -tag -width "-f conffile"
+.It Fl e Ar etcdir
+Path to the directory where poudriere will find its configuration data.
+See 
+.Sx FILES
+and
+.Sx ENVIRONMENT
+for more information.
+.El
 .Sh COMMANDS
 The first argument to
 .Nm
@@ -77,6 +89,8 @@ test on a given port (useful before submitting/committing a port).
 This command allows to configure the options for a given port
 .It distclean
 This command will cleanup old distfiles
+.It pkgclean
+This command will cleanup old and unwanted packages
 .It queue
 This command allows a non-root user to queue
 .Nm
@@ -97,6 +111,8 @@ order.
 .Pp
 These subcommands are mutually exclusive.
 .Bl -tag -width "-f conffile"
+.It Fl a
+Build all ports in the tree.
 .It Fl f Ar file
 Absolute path to a file which contains the list of ports to build.
 Ports must be specified in the form
@@ -114,14 +130,10 @@ See
 to know how to build binary packages with options that differs from
 defaults.
 .Pp
-The list of ports can also be provided by command line arguments.
-.Pp
 Here are the options associated with the
 .Cm bulk
 command.
 .Bl -tag -width "-f conffile"
-.It Fl a
-Build all ports in the tree.
 .It Fl B Ar name
 Specify which buildname to use.
 By default 
@@ -129,9 +141,13 @@ By default
 will be used.
 This can be used to resume a previous build and use the same log and URL paths.
 .It Fl c
-This flag specifies to clean the previous built binary packages.
+Clean
+.Em all
+previously built packages and logs.
 .It Fl C
-Clean previous packages for the given list to build.
+Clean only the packages specified on the command line or in in the file given in
+.Fl f Ar file
+.
 .It Fl F
 Only fetch from original MASTER_SITES.
 Skip FreeBSD mirrors.
@@ -148,15 +164,19 @@ Do not build package repository or INDEX when build is completed.
 This flag specifies on which ports
 .Ar tree
 the bulk build will be done.
+.It Fl R
+Clean RESTRICTED packages after building.
 .It Fl s
 Skip sanity tests.
 Sanity tests are made to check if the ports exists,
 does not have an increased version number, and if the compiled options
 match the current options from the make.conf files and /var/db/options.
 .It Fl t
-Add some testing.
+Add some testing to the specific ports.
 Currently uninstalls the port, and disable parallel
 jobs for make.
+.It Fl r
+Recrusively test all dependencies as well.
 .It Fl T
 Try building BROKEN ports by defining TRYBROKEN for the build.
 .It Fl w
@@ -301,8 +321,18 @@ Specifies which
 .Ar method
 to use to create the ports tree.
 Could be git or rsync (Default: git)
+.It Fl k
+When used with
+.Fl d ,
+only unregister the ports tree with out removing the files.
 .El
 .Ss testport
+.PP
+The specified port will be tested for build and packaging problems.
+All missing dependencies will first be built in parallel.
+.Ev TRYBROKEN=yes
+is automatically defined in the environment to test ports marked as
+.Ev BROKEN .
 .Pp
 There is only 1 subcommand for the testport command.
 .Bl -tag -width "-f conffile"
@@ -376,6 +406,55 @@ This will show more information during the build.
 Specify twice to enable debug output.
 .El
 .Pp
+.Ss pkgclean
+This command is used to delete all packages not specified to build.
+.Pp
+These subcommands are mutually exclusive.
+.Bl -tag -width "-f conffile"
+.It Fl a
+Keep all ports in the tree.
+.It Fl f Ar file
+Absolute path to a file which contains the list of ports to keep.
+Ports must be specified in the form
+.Ar category/port
+and shell-style comments are allowed.
+Multiple
+.Fl f Ar file
+arguments may be specified at once.
+.It cat/port cat/port2 ...
+A list of ports can be specified directly.
+.El
+.Pp
+Here are the options associated with the
+.Cm pkgclean
+command.
+This command accepts the following options:
+.Bl -tag -width "-f conffile"
+.It Fl j Ar name
+Jail to use for the packages to inspect.
+.It Fl J Ar number
+This argument specifies how many
+.Ar number
+jobs will run in parallel for gathering package information.
+.It Fl n
+Dry run, do not actually delete anything.
+.It Fl N
+Do not build package repository or INDEX when done cleaning.
+.It Fl p Ar tree
+Specifies which ports
+.Ar tree
+to use.
+.It Fl R
+Also clean restricted packages.
+.It Fl y
+Assume yes, do not confirm and just delete the files.
+.It Fl v
+This will show more information during the build.
+Specify twice to enable debug output.
+.It Fl z Ar set
+SET to use for the packages to inspect.
+.El
+.Pp
 .Ss options
 This command accepts the following parameters:
 .Bl -tag -width "-f conffile"
@@ -384,7 +463,8 @@ Absolute path to a file which contains the list of ports to configure.
 Ports must be specified in the form
 .Ar category/port
 and shell-style comments are allowed.
-.It The list of ports can also be provided by command line arguments.
+.It cat/port cat/port2 ...
+A list of ports can be specified directly.
 .El
 .Pp
 This command accepts the following options:
@@ -444,15 +524,19 @@ This specifies which SET the build is running on when using
 .Sh ENVIRONMENT
 The
 .Nm
-command does not use any
-environment variable.
+command may use the following environment variable:
+.Bl -tag -width "POUDRIERE_ETC"
+.It Pa POUDRIERE_ETC
+If specified, the path to poudriere's config directory.
+Defaults to /usr/local/etc.
+.El
 .Sh FILES
-.Bl -tag -width ".Pa /usr/local/etc/poudriere.conf" -compact
-.It Pa /usr/local/etc/poudriere.conf
+.Bl -tag -width ".Pa POUDRIERE_ETC/poudriere.conf" -compact
+.It Pa POUDRIERE_ETC/poudriere.conf
 See self-documented
 .Ar /usr/local/etc/poudriere.conf.sample
 for example.
-.It Pa /usr/local/etc/poudriere.d
+.It Pa POUDRIERE_ETC/poudriere.d
 This directory contains
 .Ar make.conf
 files for your different jails.
@@ -513,9 +597,9 @@ for a single port.
 .Pp
 Let's take the example of building a single port;
 .Pp
-.Dl "poudriere testport -d ~/mybeautifulporttotest"
+.Dl "poudriere testport -o category/port -j myjail"
 .Pp
-all the tests will be done in all the myjail.
+all the tests will be done in myjail.
 .Pp
 It starts the jail, then mount the ports tree (nullfs), then mounts the
 package dir (pourdriere_data/packages/<jailname>-<tree>-<setname>), then it mounts the
@@ -581,8 +665,8 @@ As a starter, you may want to copy an existing /var/db/ports/ to
 /usr/local/etc/poudriere.d/options.
 .Ss Create optional make.conf
 You can also specify a global make.conf which will be used for all the
-jails, and also add a per-jail, per-set, or per-jail-set make.conf.
-They will all be used in the jail, in the order shown:
+jails.
+Any of the following are allowed and will all be used in the order shown:
 .Pp
 .Dl /usr/local/etc/poudriere.d/make.conf
 .Dl /usr/local/etc/poudriere.d/<setname>-make.conf
@@ -591,6 +675,15 @@ They will all be used in the jail, in the order shown:
 .Dl /usr/local/etc/poudriere.d/<jailname>-<tree>-make.conf
 .Dl /usr/local/etc/poudriere.d/<jailname>-<setname>-make.conf
 .Dl /usr/local/etc/poudriere.d/<jailname>-<tree>-<setname>-make.conf
+.Ss Create optional src.conf
+You can also specify a global src.conf which will be used for building
+jails with the
+.Cm jail -c
+subcommand.
+Any of the following are allowed and will all be used in the order shown:
+.Pp
+.Dl /usr/local/etc/poudriere.d/src.conf
+.Dl /usr/local/etc/poudriere.d/<jailname>-src.conf
 .Sh COMPATIBILITY
 The
 .Nm

@@ -31,32 +31,34 @@ SCRIPTPREFIX=`dirname ${SCRIPTPATH}`
 
 # test if there is any args
 usage() {
-	echo "poudriere ports [parameters] [options]
+	cat << EOF
+poudriere ports [parameters] [options]
 
 Parameters:
-    -c            -- create a portstree
-    -d            -- delete a portstree
-    -u            -- update a portstree
-    -l            -- lists all available portstrees
-    -q            -- quiet (remove the header in list)
+    -c            -- Create a portstree
+    -d            -- Delete a portstree
+    -u            -- Update a portstree
+    -l            -- List all available portstrees
     -v            -- Be verbose; show more information.
 
 Options:
     -F            -- when used with -c, only create the needed ZFS
                      filesystems and directories, but do not populate
                      them.
+    -k            -- when used with -d, only unregister the directory from
+                     the ports tree list, but keep the files.
     -p name       -- specifies the name of the portstree we workon . If not
-                     specified, work on a portstree called \"default\".
-    -f fs         -- FS name (tank/jails/myjail) if fs is \"none\" then do not
+                     specified, work on a portstree called "default".
+    -f fs         -- FS name (tank/jails/myjail) if fs is "none" then do not
                      create on zfs
     -M mountpoint -- mountpoint
-    -m method     -- when used with -c, specify the method used to update the
-		     tree by default it is portsnap, possible usage are
-		     \"portsnap\", \"svn\", \"svn+http\", \"svn+https\",
-		     \"svn+file\", \"svn+ssh\", \"git\"
+    -m method     -- when used with -c, specify the method used to create the
+		     tree. By default it is portsnap, possible alternatives are
+		     "portsnap", "svn", "svn+http", "svn+https",
+		     "svn+file", "svn+ssh", "git"
     -B branch     -- Which branch to use for SVN method (default: head)
-"
-
+    -q            -- Quiet (Remove the header in the list view)
+EOF
 	exit 1
 }
 
@@ -67,8 +69,9 @@ DELETE=0
 LIST=0
 QUIET=0
 VERBOSE=0
+KEEP=0
 BRANCH=head
-while getopts "B:cFudlp:qf:M:m:v" FLAG; do
+while getopts "B:cFudklp:qf:M:m:v" FLAG; do
 	case "${FLAG}" in
 		B)
 			BRANCH="${OPTARG}"
@@ -87,6 +90,9 @@ while getopts "B:cFudlp:qf:M:m:v" FLAG; do
 			;;
 		d)
 			DELETE=1
+			;;
+		k)
+			KEEP=1
 			;;
 		l)
 			LIST=1
@@ -122,6 +128,7 @@ portsnap);;
 svn+http);;
 svn+https);;
 svn+ssh);;
+svn+file);;
 svn);;
 git);;
 *) usage;;
@@ -146,7 +153,7 @@ cleanup_new_ports() {
 
 if [ ${CREATE} -eq 1 ]; then
 	# test if it already exists
-	porttree_exists ${PTNAME} && err 2 "The ports tree ${PTNAME} already exists"
+	porttree_exists ${PTNAME} && err 2 "The ports tree, ${PTNAME}, already exists"
 	: ${PTMNT="${BASEFS:=/usr/local${ZROOTFS}}/ports/${PTNAME}"}
 	: ${PTFS="${ZPOOL}${ZROOTFS}/ports/${PTNAME}"}
 
@@ -176,13 +183,13 @@ if [ ${CREATE} -eq 1 ]; then
 
 			msg_n "Checking out the ports tree..."
 			[ ${VERBOSE} -gt 0 ] || quiet="-q"
-			svn ${quiet} co ${proto}://${SVN_HOST}/ports/${BRANCH} \
+			${SVN_CMD} ${quiet} co ${proto}://${SVN_HOST}/ports/${BRANCH} \
 				${PTMNT} || err 1 " fail"
 			echo " done"
 			;;
 		git)
-			msg "Cloning the ports tree"
-			git clone ${GIT_URL} ${PTMNT} || err 1 " fail"
+			msg_n "Cloning the ports tree..."
+			git clone -q ${GIT_URL} ${PTMNT} || err 1 " fail"
 			echo " done"
 			;;
 		esac
@@ -201,7 +208,7 @@ if [ ${DELETE} -eq 1 ]; then
 	/sbin/mount -t nullfs | /usr/bin/grep -q "${PORTSMNT:-${PTMNT}} on" \
 		&& err 1 "Ports tree \"${PTNAME}\" is currently mounted and being used."
 	msg_n "Deleting portstree \"${PTNAME}\""
-	destroyfs ${PTMNT} ports
+	[ ${KEEP} -eq 0 ] && destroyfs ${PTMNT} ports
 	rm -rf ${POUDRIERED}/ports/${PTNAME} || :
 	echo " done"
 fi
@@ -230,12 +237,13 @@ if [ ${UPDATE} -eq 1 ]; then
 	svn*)
 		msg_n "Updating the ports tree..."
 		[ ${VERBOSE} -gt 0 ] || quiet="-q"
-		svn ${quiet} update ${PORTSMNT:-${PTMNT}}
+		${SVN_CMD} upgrade ${PORTSMNT:-${PTMNT}} 2>/dev/null || :
+		${SVN_CMD} ${quiet} update ${PORTSMNT:-${PTMNT}}
 		echo " done"
 		;;
 	git)
 		msg "Pulling from ${GIT_URL}"
-		cd ${PORTSMNT:-${PTMNT}} && git pull
+		cd ${PORTSMNT:-${PTMNT}} && git pull -q
 		echo " done"
 		;;
 	*)
