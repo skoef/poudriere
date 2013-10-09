@@ -1,6 +1,6 @@
 SUBDIR= dirempty dirwatch
 
-.if defined(DRAGONFLY)
+.if !defined(DRAGONFLY)
 SUBDIR+= make_index cpdup
 .endif
 
