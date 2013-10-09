@@ -7,7 +7,4 @@ FILES=		dependency_loop.awk \
 		siginfo_buildtime.awk
 FILESDIR=	${PREFIX}/share/poudriere/awk
 
-beforeinstall:
-	mkdir -p ${DESTDIR}${FILESDIR}
-
 .include <bsd.prog.mk>

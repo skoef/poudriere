@@ -8,6 +8,7 @@ PREFIX?=	/usr/local
 FILESDIR=	${PREFIX}/share/poudriere
 FILES=		bulk.sh \
 		clean.sh \
+		combo.sh \
 		common.sh \
 		common.sh.freebsd \
 		common.sh.dragonfly \
@@ -24,6 +25,13 @@ FILES=		bulk.sh \
 FILESMODE=	${BINMODE}
 
 beforeinstall:
-	mkdir -p ${DESTDIR}${FILESDIR}
+	mkdir -p ${DESTDIR}${FILESDIR} \
+		${DESTDIR}${FILESDIR}/awk \
+		${DESTDIR}${FILESDIR}/html/assets/bootstrap/css \
+		${DESTDIR}${FILESDIR}/html/assets/bootstrap/img \
+		${DESTDIR}${FILESDIR}/html/assets/bootstrap/js \
+		${DESTDIR}${FILESDIR}/html/assets/dataTables/css \
+		${DESTDIR}${FILESDIR}/html/assets/dataTables/images \
+		${DESTDIR}${FILESDIR}/html/assets/dataTables/js \
 
 .include <bsd.prog.mk>

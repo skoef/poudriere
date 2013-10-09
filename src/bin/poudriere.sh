@@ -37,6 +37,7 @@ Usage: poudriere [-e etcdir] command [options]
 
 Commands:
     bulk        -- Generate packages for given ports
+    combo	-- Jail information and emergency dismounting
     distclean   -- Remove old distfiles
     daemon      -- Launch the poudriere daemon
     help        -- Show usage
@@ -101,7 +102,7 @@ case "${CMD}" in
 esac
 
 case "${CMD}" in
-	bulk|distclean|daemon|jail|ports|options|pkgclean|queue|status|testport)
+	bulk|combo|distclean|daemon|jail|ports|options|pkgclean|queue|status|testport)
 		;;
 	*)
 		echo "Unknown command '${CMD}'"

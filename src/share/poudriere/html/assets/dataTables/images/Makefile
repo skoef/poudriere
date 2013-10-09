@@ -13,7 +13,4 @@ FILES=		back_disabled.png \
 		sort_desc.png \
 		sort_desc_disabled.png
 
-beforeinstall:
-	mkdir -p ${DESTDIR}${FILESDIR}
-
 .include <bsd.prog.mk>
