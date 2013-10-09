@@ -33,8 +33,8 @@ Parameters:
     -c            -- Create a jail
     -d            -- Delete a jail
     -l            -- List all available jails
+    -s            -- Start a jail (chroot)
     -u            -- Update a jail
-    -C            -- Cleanup jail mounts (contingency cleanup)
 
 Options:
     -q            -- Quiet (Do not print the header)
@@ -47,9 +47,12 @@ Options:
     -m method     -- when used with -c forces the method to use by default
                      \"git\" to build world from source.  There are no other
                      method options at this time.
-    -p tree       -- Specify which ports tree the jail to start/stop with
-    -P patch      -- Specify a patch file to apply to the source before committing.
-    -t version    -- version of DragonFly to upgrade the jail to.
+    -P patch      -- Specify a patch to apply to the source before building.
+    -t version    -- Version of DragonFly to upgrade the jail to.
+
+Options for -s:
+    -p tree       -- Specify which ports tree the jail to start/stop with.
+    -z set        -- Specify which SET the jail to start/stop with.
 EOF
 	exit 1
 }
@@ -88,24 +91,29 @@ update_version() {
 	echo "${RELEASE}"
 }
 
-# Set specified version into login.conf
-update_version_env() {
-	local release="$1"
-	local login_env osversion
 
-	osversion=`awk '/\#define __DragonFly_version/ { print $3 }' ${JAILMNT}/usr/include/sys/param.h`
-	login_env=",UNAME_r=${release% *},UNAME_v=DragonFly ${release},OSVERSION=${osversion}"
+ARCH=`uname -m`
+REALARCH=${ARCH}
+START=0
+STOP=0
+LIST=0
+DELETE=0
+CREATE=0
+QUIET=0
+INFO=0
+UPDATE=0
+QUICK=0
+METHOD=git
+PTNAME=default
+SETNAME=""
 
-	sed -i "" -e "s/,UNAME_r.*:/:/ ; s/:\(setenv.*\):/:\1${login_env}:/" ${JAILMNT}/etc/login.conf
-	cap_mkdb ${JAILMNT}/etc/login.conf
-}
+SCRIPTPATH=`realpath $0`
+SCRIPTPREFIX=`dirname ${SCRIPTPATH}`
+. ${SCRIPTPREFIX}/common.sh
 
-update_jail() {
-	jail_exists ${JAILNAME} || err 1 "No such jail: ${JAILNAME}"
-	jail_runs ${JAILNAME} &&
-		err 1 "Unable to update jail ${JAILNAME}: it is running"
+TMPFS_ALL=0
 
-while getopts "J:j:v:z:m:n:M:Cdlqci:ut:P:" FLAG; do
+while getopts "J:j:v:z:m:n:M:sdlqcip:ut:z:P:Q" FLAG; do
 	case "${FLAG}" in
 		j)
 			JAILNAME=${OPTARG}
@@ -117,7 +125,8 @@ while getopts "J:j:v:z:m:n:M:Cdlqci:ut:P:" FLAG; do
 			VERSION=${OPTARG}
 			;;
 		a)
-			# Force it to stay on host's arch
+			# Option masked on DF
+			ARCH=${OPTARG}
 			case "${ARCH}" in
 			mips64)
 				[ -x `which qemu-mips64` ] || err 1 "You need qemu-mips64 installed on the host"
@@ -131,16 +140,21 @@ while getopts "J:j:v:z:m:n:M:Cdlqci:ut:P:" FLAG; do
 			METHOD=${OPTARG}
 			;;
 		f)
+			# Option masked on DF
 			JAILFS=${OPTARG}
-			;;
-		C)
-			DISMOUNT=1
 			;;
 		M)
 			JAILMNT=${OPTARG}
 			;;
 		Q)
 			QUICK=1
+			;;
+		s)
+			START=1
+			;;
+		k)
+			# Option masked on DF
+			STOP=1
 			;;
 		l)
 			LIST=1
@@ -167,6 +181,10 @@ while getopts "J:j:v:z:m:n:M:Cdlqci:ut:P:" FLAG; do
 		t)
 			TORELEASE=${OPTARG}
 			;;
+		z)
+			[ -n "${OPTARG}" ] || err 1 "Empty set name"
+			SETNAME="${OPTARG}"
+			;;
 		*)
 			usage
 			;;
@@ -185,7 +203,7 @@ else
 	PARALLEL_JOBS=${JOB_OVERRIDE}
 fi
 
-case "${CREATE}${LIST}${INFO}${DISMOUNT}${DELETE}${UPDATE}" in
+case "${CREATE}${LIST}${STOP}${START}${DELETE}${UPDATE}" in
 	100000)
 		test -z ${JAILNAME} && usage
 		create_jail
@@ -194,12 +212,12 @@ case "${CREATE}${LIST}${INFO}${DISMOUNT}${DELETE}${UPDATE}" in
 		list_jail
 		;;
 	001000)
-		test -z ${JAILNAME} && usage
-		info_jail
+		# -k stop option not supported on DF
 		;;
 	000100)
+		export SET_STATUS_ON_START=0
 		test -z ${JAILNAME} && usage
-		jail_dismount
+		# TODO: Set up CHROOT
 		;;
 	000010)
 		test -z ${JAILNAME} && usage

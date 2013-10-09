@@ -40,8 +40,8 @@ Options:
     -J n        -- Run n jobs in parallel for dependencies
     -i          -- Interactive mode. Enter jail for interactive testing and
                    automatically cleanup when done.
-    -I          -- Advanced Interactive mode. Leaves jail running with port
-                   installed after test.
+    -I          -- Advanced Interactive mode. Leaves everything mounted, but
+                   user must chroot to and cleanup the jail manually.
     -n          -- No custom prefix
     -p tree     -- Specify the path to the portstree
     -s          -- Skip sanity checks
@@ -118,10 +118,9 @@ export MASTERMNT
 export POUDRIERE_BUILD_TYPE=bulk
 
 check_jobs
-
 jail_start ${JAILNAME} ${PTNAME} ${SETNAME}
 
-[ $CONFIGSTR -eq 1 ] && injail env TERM=${SAVED_TERM} make -C ${PORTSRC}/${ORIGIN} config
+[ $CONFIGSTR -eq 1 ] && injail env TERM=${SAVED_TERM} make -C /usr/ports/${ORIGIN} config
 
 LISTPORTS=$(list_deps ${ORIGIN} )
 prepare_ports
@@ -150,16 +149,16 @@ fi
 
 bset status "testing:"
 
-PKGNAME=`injail make -C ${PORTSRC}/${ORIGIN} -VPKGNAME`
-LOCALBASE=`injail make -C ${PORTSRC}/${ORIGIN} -VLOCALBASE`
-: ${PREFIX:=$(injail make -C ${PORTSRC}/${ORIGIN} -VPREFIX)}
+PKGNAME=`injail make -C /usr/ports/${ORIGIN} -VPKGNAME`
+LOCALBASE=`injail make -C /usr/ports/${ORIGIN} -VLOCALBASE`
+: ${PREFIX:=$(injail make -C /usr/ports/${ORIGIN} -VPREFIX)}
 if [ "${USE_PORTLINT}" = "yes" ]; then
 	[ ! -x `which portlint` ] &&
 		err 2 "First install portlint if you want USE_PORTLINT to work as expected"
 	msg "Portlint check"
 	set +e
-	cd ${MASTERMNT}${PORTSRC}/${ORIGIN} &&
-		PORTSDIR="${MASTERMNT}${PORTSRC}" portlint -C | \
+	cd ${MASTERMNT}/usr/ports/${ORIGIN} &&
+		PORTSDIR="${MASTERMNT}/usr/ports" portlint -C | \
 		tee ${log}/logs/${PKGNAME}.portlint.log
 	set -e
 fi
@@ -179,25 +178,25 @@ PORTTESTING=yes
 export TRYBROKEN=yes
 export DEVELOPER_MODE=yes
 log_start
-buildlog_start ${PORTSRC}/${ORIGIN}
-if ! build_port ${PORTSRC}/${ORIGIN}; then
+buildlog_start /usr/ports/${ORIGIN}
+if ! build_port /usr/ports/${ORIGIN}; then
 	failed_status=$(bget status)
 	failed_phase=${failed_status%:*}
 
-	save_wrkdir ${MASTERMNT} "${PKGNAME}" "${PORTSRC}/${ORIGIN}" "${failed_phase}" || :
+	save_wrkdir ${MASTERMNT} "${PKGNAME}" "/usr/ports/${ORIGIN}" "${failed_phase}" || :
 	build_result=0
 	run_hook port_build_failure "${JAILNAME}" "${PTNAME}" "${MASTERMNT}${PORTSRC}/${ORIGIN}" "${failed_phase}"
 
 	if [ ${INTERACTIVE_MODE} -eq 0 ]; then
-		stop_build ${PORTSRC}/${ORIGIN}
+		stop_build /usr/ports/${ORIGIN}
 		err 1 "Build failed in phase: ${failed_phase}"
 	fi
 else
-	if [ -f ${MASTERMNT}/${PORTSRC}/${ORIGIN}/.keep ]; then
-		save_wrkdir ${MASTERMNT} "${PKGNAME}" "${PORTSRC}/${ORIGIN}" "noneed" ||:
+	if [ -f ${MASTERMNT}/usr/ports/${ORIGIN}/.keep ]; then
+		save_wrkdir ${MASTERMNT} "${PKGNAME}" "/usr/ports/${ORIGIN}" "noneed" ||:
 	fi
 	build_result=1
-	run_hook port_build_success "${JAILNAME}" "${PTNAME}" "${MASTERMNT}${PORTSRC}/${ORIGIN}"
+	run_hook port_build_success "${JAILNAME}" "${PTNAME}" "${MASTERMNT}/usr/ports/${ORIGIN}"
 fi
 
 if [ -f ${MASTERMNT}/tmp/pkgs/${PKGNAME}.${PKG_EXT} ]; then
@@ -217,10 +216,10 @@ if [ $INTERACTIVE_MODE -gt 0 ]; then
 	# Install run-depends since this is an interactive test
 	echo "PACKAGES=/packages" >> ${MASTERMNT}/etc/make.conf
 	echo "127.0.0.1 ${MASTERNAME}" >> ${MASTERMNT}/etc/hosts
-	injail make -C ${PORTSRC}/${ORIGIN} run-depends ||
+	injail make -C /usr/ports/${ORIGIN} run-depends ||
 		msg "Failed to install RUN_DEPENDS"
 
-	if ${BSDPLATFORM} = "freebsd"; then
+	if [ ${BSDPLATFORM} = "freebsd" ]; then
 		# Enable networking
 		jstop
 		jstart 1
@@ -237,7 +236,8 @@ if [ $INTERACTIVE_MODE -gt 0 ]; then
 			CLEANING_UP=1
 			exit 0
 		fi
-	else
+	fi
+	if [ ${BSDPLATFORM} = "dragonfly" ]; then
 		if [ $INTERACTIVE_MODE -eq 1 ]; then
 			msg "Entering interactive test mode. Type 'exit' when done."
 			injail env -i TERM=${SAVED_TERM} \
@@ -247,7 +247,7 @@ if [ $INTERACTIVE_MODE -gt 0 ]; then
 		else
 			msg "Leaving jail ${MASTERNAME} running, mounted at ${MASTERMNT} for interactive run testing"
 			msg "To enter jail: chroot ${MASTERMNT} /bin/sh"
-			msg "To stop jail: 'exit', 'poudriere jail -C -j ${MASTERNAME}'"
+			msg "To stop jail: 'exit', 'poudriere combo -C -j ${JAILNAME} -p ${PTNAME}'"
 			CLEANING_UP=1
 			exit 0
 		fi
@@ -256,16 +256,16 @@ if [ $INTERACTIVE_MODE -gt 0 ]; then
 fi
 
 msg "Cleaning up"
-injail make -C ${PORTSRC}/${ORIGIN} clean
+injail make -C /usr/ports/${ORIGIN} clean
 
 msg "Deinstalling package"
 injail ${PKG_DELETE} ${PKGNAME}
 
-stop_build ${PORTSRC}/${ORIGIN}
+stop_build /usr/ports/${ORIGIN}
 
 cleanup
 set +e
-run_hook test_port_ended "${JAILNAME}" "${PTNAME}" "${MASTERMNT}${PORTSRC}/${ORIGIN}" \
+run_hook test_port_ended "${JAILNAME}" "${PTNAME}" "${MASTERMNT}/usr/ports/${ORIGIN}" \
 	`bget stats_built` `bget stats_failed` `bget stats_ignored` \
 	`bget stats_skipped` "${build_result}"
 

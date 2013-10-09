@@ -18,22 +18,12 @@ injail()  {
 	chroot ${MASTERMNT}${MY_JOBID+/../${MY_JOBID} $@
 }
 
-append_make() {
-	[ $# -ne 2 ] && eargs mnt makeconf
-	local mnt=$1
-	local makeconf=$2
+jstart () {
+	echo "The jstart function is not used on DragonFly"
+}
 
-	if [ "${makeconf}" = "-" ]; then
-		makeconf="${POUDRIERED}/make.conf"
-	else
-		makeconf="${POUDRIERED}/${makeconf}-make.conf"
-	fi
-
-	[ -f "${makeconf}" ] || return 0
-	makeconf="$(realpath ${makeconf} 2>/dev/null)"
-	msg "Appending to /etc2/make.conf: ${makeconf}"
-	echo "#### ${makeconf} ####" >> ${mnt}/etc2/make.conf
-	cat "${makeconf}" >> ${mnt}/etc2/make.conf
+jstop () {
+	echo "The jstop function is not used on DragonFly"
 }
 
 jail_runs() {
@@ -48,22 +38,31 @@ jail_start() {
 	local name=$1
 	local ptname=$2
 	local setname=$3
+	local portsdir=$(pget ${ptname} mnt)
 	local arch=$(jget ${name} arch)
 	local mnt=$(jget ${name} mnt)
-	local NEEDFS="${NULLFSREF} procfs tmpfs"
+	local needfs="${NULLFSREF} procfs tmpfs"
 	local BASEIMG=${MASTERMNT}/ref
+
+	[ -d ${DISTFILES_CACHE:-/nonexistent} ] || err 1 "DISTFILES_CACHE directory does not exist. (c.f. poudriere.conf)"
 
 	jail_exists ${name} || err 1 "No such jail: ${name}"
 	jail_runs ${MASTERNAME} && err 1 "jail already running: ${MASTERNAME}"
-
 	if [ -z "${NOLINUX}" ]; then
 		if [ "${arch}" = "i386" ]; then
-			NEEDFS="${NEEDFS} linprocfs"
+			needfs="${needfs} linprocfs"
 			sysctl -n compat.linux.osrelease >/dev/null 2>&1 || kldload linux
 		fi
 	fi
-	for fs in ${NEEDFS}; do
-		lsvfs $fs >/dev/null 2>&1 || kldload $fs
+	[ -n "${USE_TMPFS}" ] && needfs="${needfs} tmpfs"
+	for fs in ${needfs}; do
+		if ! lsvfs $fs >/dev/null 2>&1; then
+			if [ $JAILED -eq 0 ]; then
+				kldload $fs || err 1 "Required kernel module '${fs}' not found"
+			else
+				err 1 "please load the $fs module on host using \"kldload $fs\""
+			fi
+		fi
 	done
 	bset status "initializing:"
 
@@ -76,35 +75,29 @@ jail_start() {
 	      ${BASEIMG}/var \
 	      ${BASEIMG}/usr/local
 
-	[ -n "${RESOLV_CONF}" ] && cp -v "${RESOLV_CONF}" "${BASEIMG}/etc2/"
-
 	if [ -d "${CCACHE_DIR:-/nonexistent}" ]; then
-		echo "WITH_CCACHE_BUILD=yes" >> ${tomnt}/etc2/make.conf
-		echo "CCACHE_DIR=/ccache" >> ${tomnt}/etc2/make.conf
+		echo "WITH_CCACHE_BUILD=yes" >> ${BASEIMG}/etc2/make.conf
+		echo "CCACHE_DIR=${HOME}/.ccache" >> ${BASEIMG}/etc2/make.conf
 	fi
-	echo "PACKAGES=/packages" >> ${tomnt}/etc2/make.conf
-	echo "DISTDIR=/distfiles" >> ${tomnt}/etc2/make.conf
+	echo "PORTSDIR=/usr/ports" >> ${BASEIMG}/etc2/make.conf
+	echo "PACKAGES=/packages" >> ${BASEIMG}/etc2/make.conf
+	echo "DISTDIR=/distfiles" >> ${BASEIMG}/etc2/make.conf
 
-	makeconf="- ${setname} ${ptname} ${name} ${name}-${ptname}"
-	[ -n "${setname}" ] && makeconf="${makeconf} ${name}-${setname}"
-	makeconf="${makeconf} ${MASTERNAME}"
-	for opt in ${makeconf}; do
-		append_make ${tomnt} ${opt}
-	done
+	setup_makeconf ${BASEIMG}/etc2/make.conf ${name} ${ptname} ${setname}
+	load_blacklist ${mnt} ${ptname} ${setname}
+
+	test -n "${RESOLV_CONF}" && cp -v "${RESOLV_CONF}" "${BASEIMG}/etc2/"
 
 	# The master jail is malleable so /etc/ can be modified later
 	# The slave jails are read only.  All have same source
 
-	[ -z "${NO_PACKAGE_BUILDING}" ] && export PACKAGE_BUILDING=yes
-	[ ${SET_STATUS_ON_START-1} -eq 1 ] && export STATUS=1
-
-	export HOME=/root
-	export USER=root
-	export FORCE_PACKAGE=yes
 	export PKGNG=1
 	export PKG_EXT="txz"
-	export PKG_ADD="${LOCALBASE:-/usr/local}/sbin/pkg add"
-	export PKG_DELETE="${LOCALBASE:-/usr/local}/sbin/pkg delete -y -f"
+	export PKG_BIN="${LOCALBASE:-/usr/local}/sbin/pkg-static"
+	export PKG_ADD="${PKG_BIN} add"
+	export PKG_DELETE="${PKG_BIN} delete -y -f"
+	export PKG_VERSION="/poudriere/pkg-static version"
+
 }
 
 jail_stop() {
@@ -119,6 +112,117 @@ jail_stop() {
 	umount ${mnt} || :
 
 	export STATUS=0
+}
+
+do_jail_mounts() {
+	[ $# -ne 2 ] && eargs mnt arch
+	local mnt=$1
+	local arch=$2
+
+	mount -t devfs devfs ${mnt}/dev
+	mount -t procfs proc ${mnt}/proc
+	if [ -z "${NOLINUX}" ]; then
+		if [ "${arch}" = "i386" ]; then
+			mount -t linprocfs linprocfs ${mnt}/compat/linux/proc
+		fi
+	fi
+
+	return 0
+}
+
+createfs() {
+	echo "The createfs function is not used in DragonFly"
+}
+
+rollbackfs() {
+	echo "The rollbackfs function is not used in DragonFly"
+}
+
+umountfs() {
+	echo "The umountfs function is not used in DragonFly"
+
+}
+
+start_builders() {
+	local task mnt
+
+	bset builders "${JOBS}"
+	bset status "starting_builders:"
+	for task in ${JOBS}; do
+		local mnt="${MASTERMNT}/${task}"
+		mkdir -p ${mnt}
+		touch ${mnt}/virgin
+	done
+	bset epoch "$(date '+%s')"
+}
+
+stop_builders() {
+	local mnt
+
+	# wait for the last running processes
+	cat ${MASTERMNT}/poudriere/var/run/*.pid 2>/dev/null | xargs pwait 2>/dev/null
+
+	msg "Stopping ${PARALLEL_JOBS} builders"
+
+	# wait for slaves to finish dismounting
+	sleep 3
+
+	cd /
+	mnt=`realpath ${JAILMNT}`
+	mount | awk -v mnt="${MASTERMNT}/" 'BEGIN{ gsub(/\//, "\\\/", mnt); } { if ($3 ~ mnt) { print $3 }}' |  sort -r | xargs umount || :
+
+	# No builders running, unset JOBS
+	JOBS=""
+}
+
+zfs_getfs() {
+	echo "The zfs_getfs function is not used in DragonFly"
+}
+
+clonefs() {
+	echo "The clonefs function is not used in DragonFly"
+
+
+}
+
+destroyfs() {
+	echo "The destroyfs function is not used in DragonFly"
+}
+
+cleanup() {
+	[ -n "${CLEANED_UP}" ] && return 0
+	# Prevent recursive cleanup on error
+	if [ -n "${CLEANING_UP}" ]; then
+		echo "Failure cleaning up. Giving up." >&2
+		return
+	fi
+	export CLEANING_UP=1
+	msg "Cleaning up"
+
+	# Only bother with this if using jails as this may be being ran
+	# from queue.sh or daemon.sh, etc.
+		if [ -n "${MASTERMNT}" -a -n "${MASTERNAME}" ] && was_a_jail_run; then
+		# If this is a builder, don't cleanup, the master will handle that.
+		if [ -n "${MY_JOBID}" ]; then
+			[ -n "${PKGNAME}" ] && clean_pool ${PKGNAME} 1 || :
+			return 0
+		fi
+
+		bset epoch "0"
+		if [ -d ${MASTERMNT}/poudriere/var/run ]; then
+			for pid in ${MASTERMNT}/poudriere/var/run/*.pid; do
+				# Ensure there is a pidfile to read or break
+				[ "${pid}" = "${MASTERMNT}/poudriere/var/run/*.pid" ] && break
+				killtree `cat ${pid}` 9 || :
+			done
+		fi
+		wait
+
+		rm -rf ${PACKAGES}/.new_packages \
+			|| :
+	fi
+
+	export CLEANED_UP=1
 }
 
 jail_dismount() {
@@ -172,51 +276,6 @@ create_slave() {
 	job_msg "Jail     Ready"
 }
 
-do_jail_mounts() {
-	[ $# -ne 2 ] && eargs mnt arch
-	local mnt=$1
-	local arch=$2
-
-	mount -t devfs devfs ${mnt}/dev
-	mount -t procfs proc ${mnt}/proc
-
-	if [ -z "${NOLINUX}" ]; then
-		if [ "${arch}" = "i386" ]; then
-			mount -t linprocfs linprocfs ${mnt}/compat/linux/proc
-		fi
-	fi
-}
-
-do_portbuild_mounts() {
-	[ $# -lt 3 ] && eargs mnt jname ptname setname
-	local mnt=$1
-	local jname=$2
-	local ptname=$3
-	local setname=$4
-	local optionsdir
-
-	mkdir -p ${POUDRIERE_DATA}/packages/${MASTERNAME}/All
-	[ -d "${CCACHE_DIR:-/nonexistent}" ] &&
-		${NULLMOUNT} ${CCACHE_DIR} ${mnt}/ccache
-
-	${NULLMOUNT} -o ro ${PORTSDIR} ${mnt}/${PORTSRC} || 
-		err 1 "Failed to mount the ports directory "
-	${NULLMOUNT} ${POUDRIERE_DATA}/packages/${MASTERNAME} ${mnt}/${STD_PACKAGES} ||
-		err 1 "Failed to mount the packages directory "
-	${NULLMOUNT} ${DISTFILES_CACHE} ${mnt}/${STD_DISTFILES} ||
-		err 1 "Failed to mount the distfiles cache directory"
-
-	optionsdir="${MASTERNAME}"
-	[ -n "${setname}" ] && optionsdir="${optionsdir} ${jname}-${setname}"
-	optionsdir="${optionsdir} ${jname}-${ptname} ${setname} ${ptname} ${jname} -"
-
-	for opt in ${optionsdir}; do
-		use_options ${mnt} ${opt} && break || continue
-	done
-
-	return 0
-}
-
 destroy_slave() {
 	[ $# -ne 2 ] && eargs job-number
 	local task="${1}"
@@ -243,51 +302,6 @@ destroy_slave() {
 	bset ${task} status "available:"
 }
 
-start_builders() {
-	local task mnt
-
-	bset builders "${JOBS}"
-	bset status "starting_builders:"
-	for task in ${JOBS}; do
-		local mnt="${MASTERMNT}/${task}"
-		mkdir -p ${mnt}
-		touch ${mnt}/virgin
-	done
-	bset epoch "$(date '+%s')"
-}
-
-
-stop_builders() {
-	local mnt
-
-	# wait for the last running processes
-	cat ${MASTERMNT}/poudriere/var/run/*.pid 2>/dev/null | xargs pwait 2>/dev/null
-
-	msg "Stopping ${PARALLEL_JOBS} builders"
-
-	# wait for slaves to finish dismounting
-	sleep 3
-
-	cd /
-	mnt=`realpath ${JAILMNT}`
-	mount | awk -v mnt="${MASTERMNT}/" 'BEGIN{ gsub(/\//, "\\\/", mnt); } { if ($3 ~ mnt) { print $3 }}' |  sort -r | xargs umount || :
-
-	# No builders running, unset JOBS
-	JOBS=""
-}
-
-zfs_getfs() {
-	# NO-OP always
-}
-
-jstop() {
-	# NO-OP for chroot
-}
-
-jstart() {
-	# NO-OP for chroot
-}
-
 killtree() {
 	local _pid=${1}
 	local _sig=${2}
@@ -303,40 +317,4 @@ killtree() {
 	   done
 	   kill -${_sig} ${_pid}
 	fi
-}
-
-cleanup() {
-	[ -n "${CLEANED_UP}" ] && return 0
-	# Prevent recursive cleanup on error
-	if [ -n "${CLEANING_UP}" ]; then
-		echo "Failure cleaning up. Giving up." >&2
-		return
-	fi
-	export CLEANING_UP=1
-	msg "Cleaning up"
-
-	# If this is a builder, don't cleanup, the master will handle that.
-	if [ -n "${MY_JOBID}" ]; then
-		[ -n "${PKGNAME}" ] && clean_pool ${PKGNAME} 1 || :
-		return 0
-	fi
-
-	[ -n "${MASTERNAME}" ] && rm -rf \
-		${POUDRIERE_DATA}/packages/${MASTERNAME}/.new_packages
-
-	bset epoch "0"
-	# Only bother with this if using jails as this may be being ran
-	# from queue.sh or daemon.sh, etc.
-	if [ -n "${MASTERMNT}" -a -n "${MASTERNAME}" ]; then
-		if [ -d ${MASTERMNT}/poudriere/var/run ]; then
-			for pid in ${MASTERMNT}/poudriere/var/run/*.pid; do
-				# Ensure there is a pidfile to read or break
-				[ "${pid}" = "${MASTERMNT}/poudriere/var/run/*.pid" ] && break
-				killtree `cat ${pid}` 9 || :
-			done
-		fi
-		wait
-	fi
-
-	export CLEANED_UP=1
 }

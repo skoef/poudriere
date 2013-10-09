@@ -27,10 +27,7 @@
 # SUCH DAMAGE.
 
 BSDPLATFORM=`uname -s | tr '[:upper:]' '[:lower:]'`
-
-dir_empty() {
-	find $1 -maxdepth 0 -empty
-}
+. $(dirname ${0})/common.sh.${BSDPLATFORM}
 BLACKLIST=""
 
 # Return true if ran from bulk/testport, ie not daemon/status/jail
@@ -117,8 +114,6 @@ eargs() {
 	*) err 1 "$# arguments expected: $*" ;;
 	esac
 }
-
-. $(dirname ${0})/common.sh.${BSDPLATFORM}
 
 run_hook() {
 	local hookfile=${HOOKDIR}/${1}.sh
@@ -434,7 +429,7 @@ jail_exists() {
 
 porttree_list() {
 	local name method mntpoint
-	for p in $(find ${POUDRIERED}/${PORTLOC} -type d -maxdepth 1 -mindepth 1 -print); do
+	for p in $(find ${POUDRIERED}/ports -type d -maxdepth 1 -mindepth 1 -print); do
 		name=${p##*/}
 		mnt=$(pget ${name} mnt)
 		method=$(pget ${name} method)
@@ -545,7 +540,7 @@ markfs() {
 ./packages/*
 ./poudriere/*
 ./proc/*
-.${PORTSRC}/*
+./usr/ports/*
 ./usr/src
 ./var/db/ports/*
 ./wrkdirs/*
@@ -562,7 +557,7 @@ EOF
 ./poudriere/*
 ./proc/*
 ./tmp/*
-.${PORTSRC}/*
+./usr/ports/*
 ./usr/src
 ./var/db/ports/*
 ./wrkdirs/*
@@ -588,7 +583,7 @@ EOF
 ./poudriere/*
 ./proc/*
 ./tmp/*
-.${PORTSRC}/*
+./usr/ports/*
 ./usr/src
 ./var/db/pkg/*
 ./var/db/ports/*
@@ -603,6 +598,17 @@ EOF
 		-cn -k uid,gid,mode,size \
 		-p ${mnt}${path} > ${mnt}/poudriere/mtree.${name}
 	echo " done"
+}
+
+rm() {
+	local arg
+
+	for arg in "$@"; do
+		[ "${arg}" = "/" ] && err 1 "Tried to rm /"
+		[ "${arg%/}" = "/bin" ] && err 1 "Tried to rm /*"
+	done
+
+	/bin/rm "$@"
 }
 
 use_options() {
@@ -627,9 +633,49 @@ use_options() {
 
 mount_packages() {
 	local mnt=$(my_path)
-	mount -t nullfs "$@" ${PACKAGES} \
+	${NULLMOUNT} "$@" ${PACKAGES} \
 		${mnt}/packages ||
 		err 1 "Failed to mount the packages directory "
+}
+
+do_portbuild_mounts() {
+	[ $# -lt 3 ] && eargs mnt jname ptname setname
+	local mnt=$1
+	local jname=$2
+	local ptname=$3
+	local setname=$4
+	local portsdir=$(pget ${ptname} mnt)
+	local optionsdir
+
+	[ -d ${portsdir}/ports ] && portsdir=${portsdir}/ports
+
+	mkdir -p ${PACKAGES}/All
+	[ -d "${CCACHE_DIR:-/nonexistent}" ] &&
+		${NULLMOUNT} ${CCACHE_DIR} ${mnt}${HOME}/.ccache
+	[ -n "${MFSSIZE}" ] && mdmfs -t -S -o async -s ${MFSSIZE} md ${mnt}/wrkdirs
+	[ ${TMPFS_WRKDIR} -eq 1 ] && mount -t tmpfs tmpfs ${mnt}/wrkdirs
+	# Only show mounting messages once, not for every builder
+	if [ ${mnt##*/} = "ref" ]; then
+		[ -d "${CCACHE_DIR:-/nonexistent}" ] &&
+			msg "Mounting ccache from: ${CCACHE_DIR}"
+		msg "Mounting packages from: ${PACKAGES}"
+	fi
+
+	${NULLMOUNT} -o ro ${portsdir} ${mnt}/usr/ports ||
+		err 1 "Failed to mount the ports directory "
+	mount_packages -o ro
+	${NULLMOUNT} ${DISTFILES_CACHE} ${mnt}/distfiles ||
+		err 1 "Failed to mount the distfiles cache directory"
+
+	optionsdir="${MASTERNAME}"
+	[ -n "${setname}" ] && optionsdir="${optionsdir} ${jname}-${setname}"
+	optionsdir="${optionsdir} ${jname}-${ptname} ${setname} ${ptname} ${jname} -"
+
+	for opt in ${optionsdir}; do
+		use_options ${mnt} ${opt} && break || continue
+	done
+
+	return 0
 }
 
 load_blacklist() {
@@ -889,7 +935,7 @@ gather_distfiles() {
 _real_build_port() {
 	[ $# -ne 1 ] && eargs portdir
 	local portdir=$1
-	local port=${portdir##${PORTSRC}/}
+	local port=${portdir##/usr/ports/}
 	local mnt=$(my_path)
 	local log=$(log_path)
 	local listfilecmd network
@@ -1251,7 +1297,7 @@ save_wrkdir() {
 	[ $# -ne 4 ] && eargs mnt port portdir phase
 	local mnt=$1
 	local port="$2"
-	local portdir="$(echo "$3" | sed -e "s|${PORTSRC}/||g")"
+	local portdir="$(echo "$3" | sed -e "s|/usr/ports/||g")"
 	local phase="$4"
 	local tardir=${POUDRIERE_DATA}/wrkdirs/${MASTERNAME}/${PTNAME}
 	local tarname=${tardir}/${PKGNAME}.${WRKDIR_ARCHIVE_FORMAT}
@@ -1550,7 +1596,7 @@ build_pkg() {
 
 	export PKGNAME="${pkgname}" # set ASAP so cleanup() can use it
 	port=$(cache_get_origin ${pkgname})
-	portdir="${PORTSRC}/${port}"
+	portdir="/usr/ports/${port}"
 
 	job_msg "Starting build of ${port}"
 	bset ${MY_JOBID} status "starting:${port}"
@@ -1569,6 +1615,9 @@ build_pkg() {
 	# as the list may start big but become very small, so here
 	# is a less-common check
 	: ${ignore:=$(injail make -C ${portdir} -VIGNORE)}
+
+	msg "Cleaning up wrkdir"
+	rm -rf ${mnt}/wrkdirs/*
 
 	log_start
 	msg "Building ${port}"
@@ -1681,11 +1730,11 @@ mangle_stderr() {
 
 list_deps() {
 	[ $# -ne 1 ] && eargs directory
-	local dir="${PORTSRC}/$1"
+	local dir="/usr/ports/$1"
 	local makeargs="-VPKG_DEPENDS -VBUILD_DEPENDS -VEXTRACT_DEPENDS -VLIB_DEPENDS -VPATCH_DEPENDS -VFETCH_DEPENDS -VRUN_DEPENDS"
 
 	mangle_stderr "WARNING" "($1)" injail make -C ${dir} $makeargs | \
-		tr '\n' ' ' | sed -e "s,[[:graph:]]*${PORTSRC}/,,g" \
+		tr '\n' ' ' | sed -e "s,[[:graph:]]*/usr/ports/,,g" \
 		-e "s,:[[:graph:]]*,,g" | \
 		sort -u || err 1 "Makefile broken: $1"
 }
@@ -1859,11 +1908,15 @@ delete_stale_pkg_cache() {
 }
 
 delete_old_pkg() {
-	[ $# -eq 2 ] || eargs pkgname origin
+	[ $# -eq 1 ] || eargs pkgname
 	local pkg="$1"
-	local o="$2"
-	local mnt=$(my_path)
-	local v v2 compiled_options current_options current_deps compiled_deps
+	local mnt
+	local o v v2 compiled_options current_options current_deps compiled_deps
+
+	o=$(pkg_get_origin "${pkg}")
+	port_is_needed "${o}" || return 0
+
+	mnt=$(my_path)
 
 	if [ ! -d "${mnt}/usr/ports/${o}" ]; then
 		msg "${o} does not exist anymore. Deleting stale ${pkg##*/}"
@@ -1873,11 +1926,6 @@ delete_old_pkg() {
 
 	v="${pkg##*-}"
 	v=${v%.*}
-	if [ ! -d "${mnt}${PORTSRC}/${o}" ]; then
-		msg "${o} does not exist anymore. Deleting stale ${pkg##*/}"
-		delete_pkg ${pkg}
-		return 0
-	fi
 	v2=$(cache_get_pkgname ${o})
 	v2=${v2##*-}
 	if [ "$v" != "$v2" ]; then
@@ -1956,7 +2004,7 @@ delete_old_pkg() {
 
 	# Check if the compiled options match the current options from make.conf and /var/db/ports
 	if [ "${CHECK_CHANGED_OPTIONS:-verbose}" != "no" ]; then
-		current_options=$(injail make -C ${PORTSRC}/${o} pretty-print-config | \
+		current_options=$(injail make -C /usr/ports/${o} pretty-print-config | \
 			tr ' ' '\n' | sed -n 's/^\+\(.*\)/\1/p' | sort | tr '\n' ' ')
 		compiled_options=$(pkg_get_options "${pkg}")
 
@@ -1973,7 +2021,6 @@ delete_old_pkg() {
 }
 
 delete_old_pkgs() {
-	local origin
 
 	msg_verbose "Checking packages for incremental rebuild needed"
 
@@ -1981,9 +2028,7 @@ delete_old_pkgs() {
 
 	parallel_start
 	for pkg in ${PACKAGES}/All/*.${PKG_EXT}; do
-		origin=$(pkg_get_origin "${pkg}")
-		port_is_needed "${origin}" || continue
-		parallel_run delete_old_pkg "${pkg}" "${origin}"
+		parallel_run delete_old_pkg "${pkg}"
 	done
 	parallel_stop
 }
@@ -2033,9 +2078,9 @@ cache_get_pkgname() {
 
 	# Add to cache if not found.
 	if [ -z "${pkgname}" ]; then
-		[ -d "${MASTERMNT}${PORTSRC}/${origin}" ] ||
+		[ -d "${MASTERMNT}/usr/ports/${origin}" ] ||
 			err 1 "Invalid port origin '${origin}' not found."
-		pkgname=$(injail make -C ${PORTSRC}/${origin} -VPKGNAME ||
+		pkgname=$(injail make -C /usr/ports/${origin} -VPKGNAME ||
 			err 1 "Error getting PKGNAME for ${origin}")
 		[ -n "${pkgname}" ] || err 1 "Missing PKGNAME for ${origin}"
 		# Make sure this origin did not already exist
@@ -2099,7 +2144,7 @@ compute_deps() {
 listed_ports() {
 	if [ ${ALL:-0} -eq 1 ]; then
 		PORTSDIR=$(pget ${PTNAME} mnt)
-		[ -d "${PORTSDIR}/${PORTLOC}" ] && PORTSDIR="${PORTSDIR}/${PORTLOC}"
+		[ -d "${PORTSDIR}/ports" ] && PORTSDIR="${PORTSDIR}/ports"
 		for cat in $(awk '$1 == "SUBDIR" { print $3}' ${PORTSDIR}/Makefile); do
 			awk -v cat=${cat} '$1 == "SUBDIR" { print cat"/"$3}' ${PORTSDIR}/${cat}/Makefile
 		done
@@ -2349,7 +2394,7 @@ prepare_ports() {
 	:> "${MASTERMNT}/poudriere/port_deps.unsorted"
 	parallel_start
 	for port in $(listed_ports); do
-		[ -d "${MASTERMNT}${PORTSRC}/${port}" ] ||
+		[ -d "${MASTERMNT}/usr/ports/${port}" ] ||
 			err 1 "Invalid port origin: ${port}"
 		parallel_run compute_deps ${port}
 	done
@@ -2430,14 +2475,6 @@ prepare_ports() {
 			delete_stale_symlinks_and_empty_dirs
 		fi
 	fi
-
-	msg "Deleting stale symlinks"
-	find -L ${POUDRIERE_DATA}/packages/${MASTERNAME} -type l \
-		-exec rm -f {} +
-
-	msg "Deleting empty directories"
-	find ${POUDRIERE_DATA}/packages/${MASTERNAME} -type d \
-		-mindepth 1 -empty -delete
 
 	bset status "cleaning:"
 	msg "Cleaning the build queue"
@@ -2658,12 +2695,108 @@ fi
 
 [ -n "${MFSSIZE}" -a -n "${USE_TMPFS}" ] && err 1 "You can't use both tmpfs and mdmfs"
 
+if [ ${BSDPLATFORM} = "FreeBSD" ]; then
+for val in ${USE_TMPFS}; do
+	case ${val} in
+	wrkdir|yes) TMPFS_WRKDIR=1 ;;
+	data) TMPFS_DATA=1 ;;
+	all) TMPFS_ALL=1 ;;
+	localbase) TMPFS_LOCALBASE=1 ;;
+	*) err 1 "Unknown value for USE_TMPFS can be a combination of wrkdir,data,all,yes,localbase" ;;
+	esac
+done
+
+case ${TMPFS_WRKDIR}${TMPFS_DATA}${TMPFS_LOCALBASE}${TMPFS_ALL} in
+1**1|*1*1|**11)
+	TMPFS_WRKDIR=0
+	TMPFS_DATA=0
+	TMPFS_LOCALBASE=0
+	;;
+esac
+fi
+
 POUDRIERE_DATA=`get_data_dir`
 : ${WRKDIR_ARCHIVE_FORMAT="tbz"}
 case "${WRKDIR_ARCHIVE_FORMAT}" in
 	tar|tgz|tbz|txz);;
 	*) err 1 "invalid format for WRKDIR_ARCHIVE_FORMAT: ${WRKDIR_ARCHIVE_FORMAT}" ;;
 esac
+
+if [ ${BSDPLATFORM} = "FreeBSD" ]; then
+#Converting portstree if any
+if [ ! -d ${POUDRIERED}/ports ]; then
+	mkdir -p ${POUDRIERED}/ports
+	[ -z "${NO_ZFS}" ] && zfs list -t filesystem -H \
+		-o ${NS}:type,${NS}:name,${NS}:method,mountpoint,name | \
+		grep "^ports" | \
+		while read t name method mnt fs; do
+			msg "Converting the ${name} ports tree"
+			pset ${name} method ${method}
+			pset ${name} mnt ${mnt}
+			pset ${name} fs ${fs}
+			# Delete the old properties
+			zfs inherit -r ${NS}:type ${fs}
+			zfs inherit -r ${NS}:name ${fs}
+			zfs inherit -r ${NS}:method ${fs}
+		done
+	if [ -f ${POUDRIERED}/portstrees ]; then
+		while read name method mnt; do
+			[ -z "${name###*}" ] && continue # Skip comments
+			msg "Converting the ${name} ports tree"
+			mkdir ${POUDRIERED}/ports/${name}
+			echo ${method} > ${POUDRIERED}/ports/${name}/method
+			echo ${mnt} > ${POUDRIERED}/ports/${name}/mnt
+		done < ${POUDRIERED}/portstrees
+		rm -f ${POUDRIERED}/portstrees
+	fi
+fi
+
+#Converting jails if any
+if [ ! -d ${POUDRIERED}/jails ]; then
+	mkdir -p ${POUDRIERED}/jails
+	[ -z "${NO_ZFS}" ] && zfs list -t filesystem -H \
+		-o ${NS}:type,${NS}:name,${NS}:version,${NS}:arch,${NS}:method,mountpoint,name | \
+		grep "^rootfs" | \
+		while read t name version arch method mnt fs; do
+			msg "Converting the ${name} jail"
+			jset ${name} version ${version}
+			jset ${name} arch ${arch}
+			jset ${name} method ${method}
+			jset ${name} mnt ${mnt}
+			jset ${name} fs ${fs}
+			# Delete the old properties
+			zfs inherit -r ${NS}:type ${fs}
+			zfs inherit -r ${NS}:name ${fs}
+			zfs inherit -r ${NS}:method ${fs}
+			zfs inherit -r ${NS}:version ${fs}
+			zfs inherit -r ${NS}:arch ${fs}
+			zfs inherit -r ${NS}:stats_built ${fs}
+			zfs inherit -r ${NS}:stats_failed ${fs}
+			zfs inherit -r ${NS}:stats_skipped ${fs}
+			zfs inherit -r ${NS}:stats_ignored ${fs}
+			zfs inherit -r ${NS}:stats_queued ${fs}
+			zfs inherit -r ${NS}:status ${fs}
+		done
+fi
+
+: ${LOIP6:=::1}
+: ${LOIP4:=127.0.0.1}
+case $IPS in
+01)
+	localipargs="ip6.addr=${LOIP6}"
+	ipargs="ip6.addr=inherit"
+	;;
+10)
+	localipargs="ip4.addr=${LOIP4}"
+	ipargs="ip4=inherit"
+	;;
+11)
+	localipargs="ip4.addr=${LOIP4} ip6.addr=${LOIP6}"
+	ipargs="ip4=inherit ip6=inherit"
+	;;
+esac
+fi
+
 
 case ${POOL_BUCKETS} in
 ''|*[!0-9]*)

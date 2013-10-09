@@ -1,6 +1,5 @@
 #!/bin/sh
-#
-# DragonFly specific
+# DRAGONFLY SPECIFIC DEFINITIONS
 
 delete_jail() {
 	test -z ${JAILNAME} && usage
@@ -10,7 +9,7 @@ delete_jail() {
 	msg_n "Removing ${JAILNAME} jail..."
 	destroyfs ${JAILMNT} jail
 	rm -rf ${POUDRIERED}/jails/${JAILNAME} || :
-	echo "done"
+	echo " done"
 }
 
 update_version() {
@@ -18,7 +17,8 @@ update_version() {
 	local login_env osversion
 
 	osversion=`awk '/\#define __DragonFly_version/ { print $3 }' ${JAILMNT}/usr/include/sys/param.h`
-	login_env=",UNAME_r=${release},UNAME_v=DragonFly ${release},OSVERSION=${osversion}"
+	login_env=",UNAME_r=${release% *},UNAME_v=DragonFly ${release},OSVERSION=${osversion}"
+
 
 	sed -i "" -e "s/,UNAME_r.*:/:/ ; s/:\(setenv.*\):/:\1${login_env}:/" ${JAILMNT}/etc/login.conf
 	cap_mkdb ${JAILMNT}/etc/login.conf
@@ -28,7 +28,7 @@ update_jail() {
 	# DragonFly expects 1 argument (quick), FreeBSD doesn't
 	jail_exists ${JAILNAME} || err 1 "No such jail: ${JAILNAME}"
 	jail_runs ${JAILNAME} &&
-		err 1 "Unable to remove jail ${JAILNAME}: it is running"
+		err 1 "Unable to update jail ${JAILNAME}: it is running"
 
 	METHOD=$(jget ${JAILNAME} method)
 	if [ -z "${METHOD}" -o "${METHOD}" = "-" ]; then
@@ -209,17 +209,11 @@ EOF
 	echo "local"               >> ${JAILMNT}/usr/.cpignore
 	echo "sys"                 >> ${JAILMNT}/.cpignore
 
-	mkdir -p ${JAILMNT}/${PORTSRC}
-	mkdir -p ${JAILMNT}/${STD_PACKAGES}
-	mkdir -p ${JAILMNT}/${STD_DISTFILES}
-	mkdir -p ${JAILMNT}/ccache
+	mkdir -p ${JAILMNT}/usr/ports
 	mkdir -p ${JAILMNT}/wrkdirs
-	mkdir -p ${JAILMNT}/var/db/pkg
 	mkdir -p ${POUDRIERE_DATA}/logs
 
 	markfs clean ${JAILMNT}
 	unset CLEANUP_HOOK
 	msg "Jail ${JAILNAME} ${VERSION} ${ARCH} is ready to be used"
-	umount ${JAILMNT}/dev
-	umount ${JAILMNT}
 }
