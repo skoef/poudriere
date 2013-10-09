@@ -42,21 +42,14 @@ Parameters:
     -v            -- Be verbose; show more information.
 
 Options:
-    -F            -- when used with -c, only create the needed ZFS
-                     filesystems and directories, but do not populate
-                     them.
     -k            -- when used with -d, only unregister the directory from
                      the ports tree list, but keep the files.
     -p name       -- specifies the name of the portstree we workon . If not
                      specified, work on a portstree called "default".
-    -f fs         -- FS name (tank/jails/myjail) if fs is "none" then do not
-                     create on zfs
     -M mountpoint -- mountpoint
     -m method     -- when used with -c, specify the method used to create the
-		     tree. By default it is portsnap, possible alternatives are
-		     "portsnap", "svn", "svn+http", "svn+https",
-		     "svn+file", "svn+ssh", "git"
-    -B branch     -- Which branch to use for SVN method (default: head)
+		     tree. By default is git, possible usage are "git",
+                     "rsync"
     -q            -- Quiet (Remove the header in the list view)
 EOF
 	exit 1
@@ -70,16 +63,19 @@ LIST=0
 QUIET=0
 VERBOSE=0
 KEEP=0
+QOP="-q"
 BRANCH=head
-while getopts "B:cFudklp:qf:M:m:v" FLAG; do
+while getopts "cudklp:M:m:vq" FLAG; do
 	case "${FLAG}" in
 		B)
+			# Masked on DragonFly
 			BRANCH="${OPTARG}"
 			;;
 		c)
 			CREATE=1
 			;;
 		F)
+			# Masked on DragonFly
 			FAKE=1
 			;;
 		u)
@@ -101,6 +97,7 @@ while getopts "B:cFudklp:qf:M:m:v" FLAG; do
 			QUIET=1
 			;;
 		f)
+			# option masked on DragonFly
 			PTFS=${OPTARG}
 			;;
 		M)
@@ -111,6 +108,7 @@ while getopts "B:cFudklp:qf:M:m:v" FLAG; do
 			;;
 		v)
 			VERBOSE=$((${VERBOSE:-0} + 1))
+			QOP=
 			;;
 		*)
 			usage
@@ -120,26 +118,21 @@ done
 
 [ $(( CREATE + UPDATE + DELETE + LIST )) -lt 1 ] && usage
 
-METHOD=${METHOD:-portsnap}
+METHOD=${METHOD:-git}
 PTNAME=${PTNAME:-default}
 
 case ${METHOD} in
-portsnap);;
-svn+http);;
-svn+https);;
-svn+ssh);;
-svn+file);;
-svn);;
+rsync);;
 git);;
 *) usage;;
 esac
 
 if [ ${LIST} -eq 1 ]; then
-	format='%-20s %-10s %s\n'
+	format='%-20s %-16s  %-6s  %s\n'
 	[ $QUIET -eq 0 ] &&
-		printf "${format}" "PORTSTREE" "METHOD" "PATH"
-	porttree_list | while read ptname ptmethod ptpath; do
-		printf "${format}" ${ptname} ${ptmethod} ${ptpath}
+		printf "${format}" "PORTSTREE" "LAST UPDATED" "METHOD" "PATH"
+	porttree_list | while read ptname ptmethod pthack ptpath; do
+		printf "${format}" ${ptname} ${pthack} ${ptmethod} ${ptpath}
 	done
 else
 	[ -z "${PTNAME}" ] && usage
@@ -165,32 +158,19 @@ if [ ${CREATE} -eq 1 ]; then
 	pset ${PTNAME} mnt ${PTMNT}
 	if [ $FAKE -eq 0 ]; then
 		case ${METHOD} in
-		portsnap)
-			mkdir ${PTMNT}/.snap
-			msg "Extracting portstree \"${PTNAME}\"..."
-			/usr/sbin/portsnap -d ${PTMNT}/.snap -p ${PTMNT} fetch extract ||
-			/usr/sbin/portsnap -d ${PTMNT}/.snap -p ${PTMNT} fetch extract ||
+		rsync)
+			msg "Cloning the ports tree via rsync"
+			cpdup -VV -i0 ${QOP} ${DPORTS_RSYNC_LOC}/ ${PTMNT}/ || \
 			    err 1 " fail"
-			;;
-		svn*)
-			case ${METHOD} in
-			svn+http) proto="http" ;;
-			svn+https) proto="https" ;;
-			svn+ssh) proto="svn+ssh" ;;
-			svn+file) proto="file" ;;
-			svn) proto="svn" ;;
-			esac
-
-			msg_n "Checking out the ports tree..."
-			[ ${VERBOSE} -gt 0 ] || quiet="-q"
-			${SVN_CMD} ${quiet} co ${proto}://${SVN_HOST}/ports/${BRANCH} \
-				${PTMNT} || err 1 " fail"
-			echo " done"
+			bhack=$(date "+%Y-%m-%d/%H:%M")
+			pset ${PTNAME} timestamp ${bhack}
 			;;
 		git)
-			msg_n "Cloning the ports tree..."
-			git clone -q ${GIT_URL} ${PTMNT} || err 1 " fail"
-			echo " done"
+			msg "Cloning the ports tree via git"
+			git clone --depth 1 ${QOP} ${DPORTS_URL} ${PTMNT} || \
+			    err 1 " fail"
+			bhack=$(date "+%Y-%m-%d/%H:%M")
+			pset ${PTNAME} timestamp ${bhack}
 			;;
 		esac
 		pset ${PTNAME} method ${METHOD}
@@ -205,7 +185,7 @@ if [ ${DELETE} -eq 1 ]; then
 	porttree_exists ${PTNAME} || err 2 "No such ports tree ${PTNAME}"
 	PTMNT=$(pget ${PTNAME} mnt)
 	[ -d "${PTMNT}/ports" ] && PORTSMNT="${PTMNT}/ports"
-	${NULLMOUNT} | /usr/bin/grep -q "${PORTSMNT:-${PTMNT}} on" \
+	/sbin/mount | /usr/bin/grep -q "${PORTSMNT:-${PTMNT}} on" \
 		&& err 1 "Ports tree \"${PTNAME}\" is currently mounted and being used."
 	msg_n "Deleting portstree \"${PTNAME}\""
 	[ ${KEEP} -eq 0 ] && destroyfs ${PTMNT} ports
@@ -218,33 +198,25 @@ if [ ${UPDATE} -eq 1 ]; then
 	METHOD=$(pget ${PTNAME} method)
 	PTMNT=$(pget ${PTNAME} mnt)
 	[ -d "${PTMNT}/ports" ] && PORTSMNT="${PTMNT}/ports"
-	${NULLMOUNT} | /usr/bin/grep -q "${PORTSMNT:-${PTMNT}} on" \
+	/sbin/mount | /usr/bin/grep -q "${PORTSMNT:-${PTMNT}} on" \
 		&& err 1 "Ports tree \"${PTNAME}\" is currently mounted and being used."
 	msg "Updating portstree \"${PTNAME}\""
 	if [ -z "${METHOD}" -o ${METHOD} = "-" ]; then
-		METHOD=portsnap
+		METHOD=git
 		pset ${PTNAME} method ${METHOD}
 	fi
 	case ${METHOD} in
-	portsnap|"")
-		if [ -d "${PTMNT}/snap" ]; then
-			SNAPDIR=${PTMNT}/snap
-		else
-			SNAPDIR=${PTMNT}/.snap
-		fi
-		/usr/sbin/portsnap -d ${SNAPDIR} -p ${PORTSMNT:-${PTMNT}} ${PSCOMMAND} alfred
-		;;
-	svn*)
-		msg_n "Updating the ports tree..."
-		[ ${VERBOSE} -gt 0 ] || quiet="-q"
-		${SVN_CMD} upgrade ${PORTSMNT:-${PTMNT}} 2>/dev/null || :
-		${SVN_CMD} ${quiet} update ${PORTSMNT:-${PTMNT}}
-		echo " done"
+	rsync)
+		msg "Updating the ports tree via rsync"
+		cpdup -VV -i10 ${QOP} ${DPORTS_RSYNC_LOC}/ ${PTMNT}/
+		bhack=$(date "+%Y-%m-%d/%H:%M")
+		pset ${PTNAME} timestamp ${bhack}
 		;;
 	git)
-		msg "Pulling from ${GIT_URL}"
-		cd ${PORTSMNT:-${PTMNT}} && git pull -q
-		echo " done"
+		msg "Pulling from ${DPORTS_URL}"
+		cd ${PORTSMNT:-${PTMNT}} && git pull ${QOP}
+		bhack=$(date "+%Y-%m-%d/%H:%M")
+		pset ${PTNAME} timestamp ${bhack}
 		;;
 	*)
 		err 1 "Undefined upgrade method"

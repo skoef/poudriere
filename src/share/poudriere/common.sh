@@ -433,7 +433,8 @@ porttree_list() {
 		name=${p##*/}
 		mnt=$(pget ${name} mnt)
 		method=$(pget ${name} method)
-		echo "${name} ${method:--} ${mnt}"
+		hack=$(pget ${name} timestamp)
+		echo "${name} ${method:--} ${hack} ${mnt}"
 	done
 }
 
