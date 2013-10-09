@@ -15,7 +15,7 @@ TMPFS_ALL=0
 TMPFS_LOCALBASE=0
 
 injail()  {
-	chroot ${MASTERMNT}${MY_JOBID+/../${MY_JOBID} $@
+	chroot ${MASTERMNT}${MY_JOBID+/../${MY_JOBID}} $@
 }
 
 jstart () {
