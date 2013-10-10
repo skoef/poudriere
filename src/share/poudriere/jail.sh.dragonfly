@@ -26,8 +26,8 @@ update_version() {
 update_jail() {
 	# DragonFly expects 1 argument (quick), FreeBSD doesn't
 	jail_exists ${JAILNAME} || err 1 "No such jail: ${JAILNAME}"
-#	jail_runs ${JAILNAME} &&
-#		err 1 "Unable to update jail ${JAILNAME}: it is running"
+	jail_runs ${JAILNAME} &&
+		err 1 "Unable to update jail ${JAILNAME}: it is running"
 
 	METHOD=$(jget ${JAILNAME} method)
 	if [ -z "${METHOD}" -o "${METHOD}" = "-" ]; then
@@ -114,7 +114,6 @@ install_from_git() {
 	local bhack
 
 	[ -d ${JAILMNT}/usr/src ] && UPDATE=1
-	jset ${JAILNAME} status pulling
 	mkdir -p ${JAILMNT}/usr/src
 	mkdir -p ${JAILMNT}/dev
 	cd ${JAILMNT}/usr/src
@@ -143,13 +142,11 @@ install_from_git() {
 		git pull || err 1 "Fail "
 		echo " done"
 	fi
-	jset ${JAILNAME} status "building"
 	mount -t devfs devfs ${JAILMNT}/dev
 	build_and_install_world ${1}
 	umount ${JAILMNT}/dev
 	bhack="$(date '+%Y-%m-%d/%H:%M')"
 	jset ${JAILNAME} timestamp "${bhack}"
-	jset ${JAILNAME} status "idle:"
 }
 
 create_jail() {

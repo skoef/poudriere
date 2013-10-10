@@ -28,8 +28,8 @@ jstop () {
 
 jail_runs() {
 	[ $# -ne 1 ] && eargs jname
-	local check=$(jget ${1} status)
-	[ "${check}" = "idle:" ] && return 0
+	local mounted=$(check_mount ${1})
+	[ -n "${mounted}" ] && return 0
 	return 1
 }
 
@@ -328,4 +328,12 @@ killtree() {
 	   done
 	   kill -${_sig} ${_pid}
 	fi
+}
+
+check_mount() {
+	[ $# -ne 1 ] && eargs jailname
+	local mnt=$(jget ${1} mnt)
+	local AWKCMD='{ if ($1 == mnt) print $3 }'
+	mount | awk -v mnt="${mnt}" "${AWKCMD}"
+	return 0
 }
