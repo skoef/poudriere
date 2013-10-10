@@ -127,7 +127,7 @@ prepare_ports
 
 log=$(log_path)
 
-run_hook test_port_start "${JAILNAME}" "${PTNAME}" "${MASTERMNT}${PORTSRC}/${ORIGIN}" \
+run_hook test_port_start "${JAILNAME}" "${PTNAME}" "${MASTERMNT}/usr/ports/${ORIGIN}" \
 	`bget stats_queued`
 
 POUDRIERE_BUILD_TYPE=bulk parallel_build ${JAILNAME} ${PTNAME} ${SETNAME}
@@ -186,7 +186,7 @@ if ! build_port /usr/ports/${ORIGIN}; then
 
 	save_wrkdir ${MASTERMNT} "${PKGNAME}" "/usr/ports/${ORIGIN}" "${failed_phase}" || :
 	build_result=0
-	run_hook port_build_failure "${JAILNAME}" "${PTNAME}" "${MASTERMNT}${PORTSRC}/${ORIGIN}" "${failed_phase}"
+	run_hook port_build_failure "${JAILNAME}" "${PTNAME}" "${MASTERMNT}/usr/ports/${ORIGIN}" "${failed_phase}"
 
 	ln -s ../${PKGNAME}.log ${log}/logs/errors/${PKGNAME}.log
 	errortype=$(${SCRIPTPREFIX}/processonelog.sh \
