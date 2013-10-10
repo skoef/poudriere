@@ -177,6 +177,7 @@ injail install -d -o ${PORTBUILD_USER} /tmp/pkgs
 PORTTESTING=yes
 export TRYBROKEN=yes
 export DEVELOPER_MODE=yes
+sed -i '' '/DISABLE_MAKE_JOBS=poudriere/d' ${MASTERMNT}/etc/make.conf
 log_start
 buildlog_start /usr/ports/${ORIGIN}
 if ! build_port /usr/ports/${ORIGIN}; then
@@ -187,14 +188,24 @@ if ! build_port /usr/ports/${ORIGIN}; then
 	build_result=0
 	run_hook port_build_failure "${JAILNAME}" "${PTNAME}" "${MASTERMNT}${PORTSRC}/${ORIGIN}" "${failed_phase}"
 
+	ln -s ../${PKGNAME}.log ${log}/logs/errors/${PKGNAME}.log
+	errortype=$(${SCRIPTPREFIX}/processonelog.sh \
+		${log}/logs/errors/${PKGNAME}.log \
+		2> /dev/null)
+	badd ports.failed "${ORIGIN} ${PKGNAME} ${failed_phase} ${errortype}"
+	update_stats
+
 	if [ ${INTERACTIVE_MODE} -eq 0 ]; then
 		stop_build /usr/ports/${ORIGIN}
 		err 1 "Build failed in phase: ${failed_phase}"
 	fi
 else
+	badd ports.built "${ORIGIN} ${PKGNAME}"
 	if [ -f ${MASTERMNT}/usr/ports/${ORIGIN}/.keep ]; then
-		save_wrkdir ${MASTERMNT} "${PKGNAME}" "/usr/ports/${ORIGIN}" "noneed" ||:
+		save_wrkdir ${MASTERMNT} "${PKGNAME}" "/usr/ports/${ORIGIN}" \
+		    "noneed" || :
 	fi
+	update_stats
 	build_result=1
 	run_hook port_build_success "${JAILNAME}" "${PTNAME}" "${MASTERMNT}/usr/ports/${ORIGIN}"
 fi

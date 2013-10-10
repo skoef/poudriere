@@ -680,7 +680,7 @@ do_portbuild_mounts() {
 }
 
 load_blacklist() {
-	[ $# -lt 2 ] && dst_makeconf eargs name ptname setname
+	[ $# -lt 2 ] && eargs name ptname setname
 	local name=$1
 	local ptname=$3
 	local setname=$4
@@ -706,7 +706,7 @@ load_blacklist() {
 }
 
 setup_makeconf() {
-	[ $# -lt 3 ] && dst_makeconf eargs name ptname setname
+	[ $# -lt 3 ] && eargs dst_makeconf name ptname setname
 	local dst_makeconf=$1
 	local name=$2
 	local ptname=$3
@@ -1097,8 +1097,9 @@ Try testport with -n to use PREFIX=LOCALBASE"
 					injail ${PKG_BIN} query %Fp ${PKGNAME}
 				else
 					injail pkg_info -qL ${PKGNAME}
-				fi | injail xargs -J % find % -type l |
-				    injail xargs stat -l |
+				fi | tr '\n' '\0' | injail xargs -0 -J % \
+				    find % -type l -print0 |
+				    injail xargs -0 stat -l |
 				    grep "${portdir}/work/stage" && die=1
 				if [ ${die} -eq 1 ]; then
 					msg "Port is installing absolute symlinks into stagedir"
@@ -2500,8 +2501,8 @@ prepare_ports() {
 		xargs -J % mv % "${MASTERMNT}/poudriere/pool/unbalanced"
 	balance_pool
 
-	[ -z "${PORTTESTING}" -a -z "${ALLOW_MAKE_JOBS}" ] &&
-		echo "DISABLE_MAKE_JOBS=yes" >> ${MASTERMNT}/etc/make.conf
+	[ -z "${ALLOW_MAKE_JOBS}" ] && echo "DISABLE_MAKE_JOBS=poudriere" \
+	    >> ${MASTERMNT}/etc/make.conf
 
 	[ -n "${JOBS_LIMIT}" ] && echo "MAKE_JOBS_NUMBER=${JOBS_LIMIT}" \
 		>> ${MASTERMNT}/etc/make.conf
