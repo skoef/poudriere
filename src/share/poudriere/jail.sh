@@ -59,18 +59,27 @@ EOF
 
 list_jail() {
 	local format
-	local j name version arch method mnt
+	local j name version arch method mnt mntx hack
 
-	format='%-20s %-20s %-7s %-7s %s\n'
+	format='%-20s %-8s %-17s %-7s %-7s %s\n'
 	[ ${QUIET} -eq 0 ] &&
-		printf "${format}" "JAILNAME" "VERSION" "ARCH" "METHOD" "PATH"
+		printf "${format}" "JAILNAME" "VERSION" "LAST-UPDATED" "ARCH" "METHOD" "PATH"
 	for j in $(find ${POUDRIERED}/jails -type d -maxdepth 1 -mindepth 1 -print); do
 		name=${j##*/}
 		version=$(jget ${name} version)
 		arch=$(jget ${name} arch)
 		method=$(jget ${name} method)
-		mnt=$(jget ${name} mnt)
-		printf "${format}" "${name}" "${version}" "${arch}" "${method}" "${mnt}"
+		hack=$(jget ${name} timestamp)
+		mntx=$(jget ${name} mnt)
+		case ${mntx} in
+		    ${BASEFS}/*)
+		    	mnt=BASEFS${mntx#${BASEFS}}
+			;;
+		    *)
+			mnt=${mntx}
+			;;
+		esac
+		printf "${format}" "${name}" "${version}" "${hack}" "${arch}" "${method}" "${mnt}"
 	done
 }
 
