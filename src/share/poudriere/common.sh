@@ -431,9 +431,17 @@ porttree_list() {
 	local name method mntpoint
 	for p in $(find ${POUDRIERED}/ports -type d -maxdepth 1 -mindepth 1 -print); do
 		name=${p##*/}
-		mnt=$(pget ${name} mnt)
 		method=$(pget ${name} method)
 		hack=$(pget ${name} timestamp)
+		mntx=$(pget ${name} mnt)
+		case ${mntx} in
+		    ${BASEFS}/*)
+		    	mnt=BASEFS${mntx#${BASEFS}}
+			;;
+		    *)
+			mnt=${mntx}
+			;;
+		esac
 		echo "${name} ${method:--} ${hack} ${mnt}"
 	done
 }

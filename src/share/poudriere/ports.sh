@@ -128,9 +128,9 @@ git);;
 esac
 
 if [ ${LIST} -eq 1 ]; then
-	format='%-20s %-16s  %-6s  %s\n'
+	format='%-20s %-17s %-7s %s\n'
 	[ $QUIET -eq 0 ] &&
-		printf "${format}" "PORTSTREE" "LAST UPDATED" "METHOD" "PATH"
+		printf "${format}" "PORTSTREE" "LAST-UPDATED" "METHOD" "PATH"
 	porttree_list | while read ptname ptmethod pthack ptpath; do
 		printf "${format}" ${ptname} ${pthack} ${ptmethod} ${ptpath}
 	done
