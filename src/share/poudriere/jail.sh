@@ -41,11 +41,11 @@ Options:
     -J n          -- Run buildworld in parallel with n jobs.
     -j jailname   -- Specify the jailname
     -v version    -- Specify which version of DragonFly we want in jail
-                     e.g. \"3.4\", \"3.6\", or \"master\"
+                     e.g. "3.4", "3.6", or "master"
     -M mountpoint -- Mountpoint
     -Q quickworld -- when used with -u jail is incrementally updated
     -m method     -- when used with -c forces the method to use by default
-                     \"git\" to build world from source.  There are no other
+                     "git" to build world from source.  There are no other
                      method options at this time.
     -P patch      -- Specify a patch to apply to the source before building.
     -t version    -- Version of DragonFly to upgrade the jail to.
@@ -110,6 +110,7 @@ SETNAME=""
 SCRIPTPATH=`realpath $0`
 SCRIPTPREFIX=`dirname ${SCRIPTPATH}`
 . ${SCRIPTPREFIX}/common.sh
+. ${SCRIPTPREFIX}/jail.sh.${BSDPLATFORM}
 
 TMPFS_ALL=0
 
@@ -119,7 +120,7 @@ while getopts "J:j:v:z:m:n:M:sdlqcip:ut:z:P:Q" FLAG; do
 			JAILNAME=${OPTARG}
 			;;
 		J)
-			JOB_OVERRIDE=${OPTARG}
+			PARALLEL_JOBS=${OPTARG}
 			;;
 		v)
 			VERSION=${OPTARG}
@@ -197,12 +198,7 @@ if [ -n "${JAILNAME}" -a ${CREATE} -eq 0 ]; then
 	JAILMNT=$(jget ${JAILNAME} mnt)
 fi
 
-if [ "${JOB_OVERRIDE}" = "0" ]; then
-	PARALLEL_JOBS=$(sysctl -n hw.ncpu)
-else
-	PARALLEL_JOBS=${JOB_OVERRIDE}
-fi
-
+check_jobs
 case "${CREATE}${LIST}${STOP}${START}${DELETE}${UPDATE}" in
 	100000)
 		test -z ${JAILNAME} && usage
@@ -225,7 +221,7 @@ case "${CREATE}${LIST}${STOP}${START}${DELETE}${UPDATE}" in
 		;;
 	000001)
 		test -z ${JAILNAME} && usage
-		update_jail
+		update_jail ${QUICK}
 		;;
 	*)
 		usage

@@ -180,7 +180,7 @@ stop_builders() {
 }
 
 zfs_getfs() {
-	echo "The zfs_getfs function is not used in DragonFly"
+	# Return nothing to indicate NO ZFS
 }
 
 clonefs() {

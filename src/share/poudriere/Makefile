@@ -15,6 +15,8 @@ FILES=		bulk.sh \
 		daemon.sh \
 		distclean.sh \
 		jail.sh \
+		jail.sh.freebsd \
+		jail.sh.dragonfly \
 		options.sh \
 		ports.sh \
 		pkgclean.sh \

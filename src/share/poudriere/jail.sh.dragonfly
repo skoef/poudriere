@@ -19,7 +19,6 @@ update_version() {
 	osversion=`awk '/\#define __DragonFly_version/ { print $3 }' ${JAILMNT}/usr/include/sys/param.h`
 	login_env=",UNAME_r=${release% *},UNAME_v=DragonFly ${release},OSVERSION=${osversion}"
 
-
 	sed -i "" -e "s/,UNAME_r.*:/:/ ; s/:\(setenv.*\):/:\1${login_env}:/" ${JAILMNT}/etc/login.conf
 	cap_mkdb ${JAILMNT}/etc/login.conf
 }
@@ -27,8 +26,8 @@ update_version() {
 update_jail() {
 	# DragonFly expects 1 argument (quick), FreeBSD doesn't
 	jail_exists ${JAILNAME} || err 1 "No such jail: ${JAILNAME}"
-	jail_runs ${JAILNAME} &&
-		err 1 "Unable to update jail ${JAILNAME}: it is running"
+#	jail_runs ${JAILNAME} &&
+#		err 1 "Unable to update jail ${JAILNAME}: it is running"
 
 	METHOD=$(jget ${JAILNAME} method)
 	if [ -z "${METHOD}" -o "${METHOD}" = "-" ]; then
@@ -113,12 +112,11 @@ install_from_git() {
 	local bver
 	local bverz
 	local bhack
-	local mounted=$(check_mount "${JAILFS}")
 
-	[ -n "${mounted}" ] && err 1 "Already mounted: ${JAILFS}"
-	${NULLMOUNT} ${JAILFS} "${JAILMNT}" || err 1 "Failed to mount JAILFS"
 	[ -d ${JAILMNT}/usr/src ] && UPDATE=1
+	jset ${JAILNAME} status pulling
 	mkdir -p ${JAILMNT}/usr/src
+	mkdir -p ${JAILMNT}/dev
 	cd ${JAILMNT}/usr/src
 	if [ ${UPDATE} -eq 0 ]; then
 		msg "Checking out the sources via git..."
@@ -145,12 +143,13 @@ install_from_git() {
 		git pull || err 1 "Fail "
 		echo " done"
 	fi
+	jset ${JAILNAME} status "building"
 	mount -t devfs devfs ${JAILMNT}/dev
 	build_and_install_world ${1}
 	umount ${JAILMNT}/dev
-	umount ${JAILMNT}
-	bhack="$(date '+%Y-%m-%d %H:%M:%S')"
+	bhack="$(date '+%Y-%m-%d/%H:%M')"
 	jset ${JAILNAME} timestamp "${bhack}"
+	jset ${JAILNAME} status "idle:"
 }
 
 create_jail() {
