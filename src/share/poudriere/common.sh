@@ -143,7 +143,7 @@ log_start() {
 	latest_log=${POUDRIERE_DATA}/logs/${POUDRIERE_BUILD_TYPE}/latest-per-pkg/${PKGNAME%-*}/${PKGNAME##*-}
 
 	# Make sure directory exists
-	mkdir -p ${log}/logs/success ${latest_log}
+	mkdir -p ${log}/logs ${latest_log}
 
 	:> ${logfile}
 
@@ -1599,7 +1599,6 @@ build_pkg() {
 	local clean_rdepends=0
 	local log=$(log_path)
 	local ignore
-	local zip_log=0
 	local errortype
 
 	trap '' SIGTSTP
@@ -1610,7 +1609,7 @@ build_pkg() {
 
 	job_msg "Starting build of ${port}"
 	bset ${MY_JOBID} status "starting:${port}"
-	create_slave ${MASTERMNT} ${MY_JOBID}
+	create_slave ${MY_JOBID}
 
 	if [ ${TMPFS_LOCALBASE} -eq 1 -o ${TMPFS_ALL} -eq 1 ]; then
 		umount -f ${mnt}/${LOCALBASE:-/usr/local} 2>/dev/null || :
@@ -1657,7 +1656,6 @@ build_pkg() {
 		injail make -C ${portdir} clean
 
 		if [ ${build_failed} -eq 0 ]; then
-			zip_log=1
 			badd ports.built "${port} ${PKGNAME}"
 			job_msg "Finished ${port}: Success"
 			run_hook pkgbuild success "${port}" "${PKGNAME}"
@@ -1683,12 +1681,7 @@ build_pkg() {
 	bset ${MY_JOBID} status "done:${port}"
 
 	stop_build ${portdir}
-
-	destroy_slave ${MASTERMNT} ${MY_JOBID}
-	if [ ${zip_log} -eq 1 ]; then
-		bzip2 ${log}/logs/${PKGNAME}.log
-		mv ${log}/logs/${PKGNAME}.log.bz2 $(log_path)/success/
-	fi
+	destroy_slave ${MY_JOBID}
 
 	echo ${MY_JOBID} >&6
 }
@@ -2826,6 +2819,6 @@ esac
 : ${NOHANG_TIME:=7200}
 : ${PATCHED_FS_KERNEL:=no}
 
-BUILDNAME=$(date +%Y-%m-%d_%Hh%Mm%Ss)
+BUILDNAME=$(date +%Y%m%d_%H%M%S)
 
 [ -d ${WATCHDIR} ] || mkdir -p ${WATCHDIR}
