@@ -2070,7 +2070,7 @@ next_in_queue() {
 
 	[ ! -d ${MASTERMNT}/poudriere/pool ] && err 1 "Build pool is missing"
 	#p=$(find ${POOL_BUCKET_DIRS} -type d -depth 1 -empty -print -quit || :)
-	p=$(find ${POOL_BUCKET_DIRS} -type d -depth 1 -empty -print || :)
+	p=$(find ${POOL_BUCKET_DIRS} -type d -depth 1 -empty -print | head -1 || :)
 	[ -n "$p" ] || return 0
 	pkgname=${p##*/}
 	mv ${p} ${MASTERMNT}/poudriere/building/${pkgname}
