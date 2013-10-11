@@ -672,7 +672,7 @@ do_portbuild_mounts() {
 
 	${NULLMOUNT} -o ro ${portsdir} ${mnt}/usr/ports ||
 		err 1 "Failed to mount the ports directory "
-	mount_packages -o ro
+	mount_packages
 	${NULLMOUNT} ${DISTFILES_CACHE} ${mnt}/distfiles ||
 		err 1 "Failed to mount the distfiles cache directory"
 
@@ -1265,17 +1265,10 @@ Try testport with -n to use PREFIX=LOCALBASE"
 		fi
 	done
 
-	if [ -d "${mnt}/new_packages/${PKGNAME}" ]; then
-		# everything was fine we can copy package the package to the package
-		# directory
-		find ${mnt}/new_packages/${PKGNAME} \
-			-mindepth 1 \( -type f -or -type l \) | while read pkg_path; do
-			pkg_file=${pkg_path#${mnt}/new_packages/${PKGNAME}}
-			pkg_base=${pkg_file%/*}
-			mkdir -p ${PACKAGES}/${pkg_base}
-			mv ${pkg_path} ${mnt}/packages/${pkg_base}
-		done
-	fi
+	# everything was fine we can copy package the package to the package
+	# directory.  The "All" and "Latest" directories are guaranteed to exist
+	mv ${mnt}/new_packages/All/* ${mnt}/packages/All
+	mv ${mnt}/new_packages/Latest/* ${mnt}/packages/Latest
 
 	bset ${MY_JOBID} status "idle:"
 	return 0
@@ -2574,14 +2567,7 @@ read_packages_from_params()
 clean_restricted() {
 	msg "Cleaning restricted packages"
 	bset status "clean_restricted:"
-	# Remount rw
-	# mount_nullfs does not support mount -u
-	umount ${MASTERMNT}/packages
-	mount_packages
 	injail make -C /usr/ports -j ${PARALLEL_JOBS} clean-restricted >/dev/null
-	# Remount ro
-	umount ${MASTERMNT}/packages
-	mount_packages -o ro
 }
 
 build_repo() {
@@ -2591,9 +2577,6 @@ build_repo() {
 		ensure_pkg_installed
 		rm -f ${PACKAGES}/repo.txz \
 			${PACKAGES}/repo.sqlite
-		# remount rw
-		umount ${MASTERMNT}/packages
-		mount_packages
 		if [ -f "${PKG_REPO_SIGNING_KEY:-/nonexistent}" ]; then
 			install -m 0400 ${PKG_REPO_SIGNING_KEY} \
 				${MASTERMNT}/tmp/repo.key
@@ -2605,9 +2588,6 @@ build_repo() {
 		else
 			injail /poudriere/pkg-static repo /packages
 		fi
-		# Remount ro
-		umount ${MASTERMNT}/packages
-		mount_packages -o ro
 	else
 		msg "Preparing INDEX"
 		bset status "index:"

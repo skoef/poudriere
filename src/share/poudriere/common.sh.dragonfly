@@ -194,6 +194,7 @@ stop_builders() {
 	cd /
 	mnt=${MASTERMNT%/ref}
 	mount | awk -v mnt="${mnt}" '{ if ($3 ~ mnt && $3 !~ /\/ref/) { print $3 }}' |  sort -r | xargs umount || :
+	mount | awk -v mnt="${MASTERMNT}" '{ if ($3 ~ mnt) ${ print $3 }}' | xargs umount || :
 
 	# No builders running, unset JOBS
 	JOBS=""
@@ -270,6 +271,8 @@ create_slave() {
 	    ${NULLMOUNT} -o rdonly ${MASTERMNT} ${mnt}
 	    do_jail_mounts ${mnt} ${arch}
 	    do_portbuild_mounts ${mnt} ${jname} ${ptname} ${setname}
+	    mkdir -p ${mnt}/packages/All
+	    mkdir -p ${mnt}/packages/Latest
 	else
 	    job_msg "Jail     Renovating"
 	fi
