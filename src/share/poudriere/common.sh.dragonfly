@@ -299,27 +299,31 @@ create_slave() {
 
 destroy_slave() {
 	[ $# -ne 1 ] && eargs job-number
+	local stragglers
 	local task="${1}"
 	local mnt="${MASTERMNT%/ref}/${task}"
+	local AWKCMD='{ if ($3 ~ mnt && ( \
+		$3 ~ /\/tmp/ || \
+		$3 ~ /\/wrkdirs/ || \
+		$3 ~ /\/etc/ || \
+		$3 ~ /\/var/ || \
+		$3 ~ /\/compat/ || \
+		$3 ~ /\/usr\/local/ || \
+		$3 ~ /\/portdistfiles/ || \
+		$3 ~ /\/new_packages/ \
+	)) { print $3 }}'
 
 	# make sure cwd is not on mount
 	cd /
 
-	# Repeat dismount attempts in case 1 or more failed
-	# This also helps reap mount on previous failed attempts
-	for x in 1 2; do
+	mount | awk -v mnt="${mnt}" "${AWKCMD}" | sort -r | xargs umount || :
+	# Possibly repeat dismount attempts in case some failed
+	# This also helps reap mounts on previous failed attempts
+	stragglers=$(mount | awk -v mnt="${mnt}" "${AWKCMD}" | sort -r)
+	if [ -n "${stagglers}" ]; then
 	   sleep 3
-	   dismount ${mnt}/tmp
-	   dismount ${mnt}/wrkdirs
-	   dismount ${mnt}/etc
-	   dismount ${mnt}/var
-	   dismount ${mnt}/compat/linprocfs
-	   dismount ${mnt}/compat/srv4
-	   dismount ${mnt}/compat
-	   dismount ${mnt}/usr/local
-	   dismount ${mnt}/portdistfiles
-	   dismount ${mnt}/new_packages
-	done
+	   umount ${stagglers}
+	fi
 }
 
 killtree() {
