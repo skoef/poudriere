@@ -100,6 +100,8 @@ jail_start() {
 	[ -d "${portsdir}/ports" ] && portsdir=${portsdir}/ports
 	msg "Mounting ports/packages/distfiles"
 	do_portbuild_mounts ${MASTERMNT} ${name} ${ptname} ${setname}
+	mkdir -p ${MASTERMNT}/new_packages/All
+	mkdir -p ${MASTERMNT}/new_packages/Latest
 	if [ ! -f ${MASTERMNT}/usr/ports/Mk/bsd.stage.mk ]; then
 		echo "NO_STAGE=yes" >> ${MASTERMNT}/etc/make.conf
 	fi

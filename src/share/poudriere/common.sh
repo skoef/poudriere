@@ -1315,8 +1315,10 @@ Try testport with -n to use PREFIX=LOCALBASE"
 
 	# everything was fine we can copy package the package to the package
 	# directory.  The "All" and "Latest" directories are guaranteed to exist
-	mv ${mnt}/new_packages/All/* ${mnt}/packages/All
-	mv ${mnt}/new_packages/Latest/* ${mnt}/packages/Latest
+	find ${mnt}/new_packages/All -type f \
+		-exec mv {} ${mnt}/packages/All \;
+	find ${mnt}/new_packages/Latest -type l \
+		-exec mv {} {mnt}/packages/Latest \;
 
 	bset ${MY_JOBID} status "idle:"
 	return 0
