@@ -5,6 +5,7 @@ NULLMOUNT="/sbin/mount_null"
 NULLFSREF="null"
 NO_ZFS=TRUE
 USE_TMPFS=true
+JAILED=0
 TMPFS_WRKDIR=0
 TMPFS_DATA=0
 TMPFS_ALL=0
@@ -15,11 +16,11 @@ injail()  {
 }
 
 jstart () {
-	echo "The jstart function is not used on DragonFly"
+	# NO OP on DragonFly
 }
 
 jstop () {
-	echo "The jstop function is not used on DragonFly"
+	# NO OP on DragonFly
 }
 
 jail_runs() {
@@ -73,6 +74,8 @@ jail_start() {
 	cpdup -x -VV -i0 ${mnt}/ ${MASTERMNT}/
 	mkdir ${MASTERMNT}/packages \
 	      ${MASTERMNT}/distfiles \
+	      ${MASTERMNT}/new_packages \
+	      ${MASTERMNT}/portdistfiles \
 	      ${MASTERMNT}/usr/local
 
 	if [ -d "${CCACHE_DIR:-/nonexistent}" ]; then
@@ -87,8 +90,6 @@ jail_start() {
 	load_blacklist ${mnt} ${ptname} ${setname}
 
 	test -n "${RESOLV_CONF}" && cp -v "${RESOLV_CONF}" "${MASTERMNT}/etc/"
-	cp -a ${MASTERMNT}/etc ${MASTERMNT}/etc2
-	cp -a ${MASTERMNT}/var ${MASTERMNT}/var2
 
 	msg "Mounting system devices for ${MASTERNAME}"
 	do_jail_mounts ${MASTERMNT} ${arch}
@@ -98,6 +99,11 @@ jail_start() {
 	[ -d "${portsdir}/ports" ] && portsdir=${portsdir}/ports
 	msg "Mounting ports/packages/distfiles"
 	do_portbuild_mounts ${MASTERMNT} ${name} ${ptname} ${setname}
+	if [ ! -f ${MASTERMNT}/usr/ports/Mk/bsd.stage.mk ]; then
+		echo "NO_STAGE=yes" >> ${MASTERMNT}/etc/make.conf
+	fi
+	cp -a ${MASTERMNT}/etc ${MASTERMNT}/etc2
+	cp -a ${MASTERMNT}/var ${MASTERMNT}/var2
 	
 	was_a_bulk_run && show_log_info
 
@@ -178,7 +184,7 @@ stop_builders() {
 	local mnt
 
 	# wait for the last running processes
-	cat ${MASTERMNT}/poudriere/var/run/*.pid 2>/dev/null | xargs pwait 2>/dev/null
+	#cat ${MASTERMNT}/poudriere/var/run/*.pid 2>/dev/null | xargs pwait 2>/dev/null
 
 	msg "Stopping ${PARALLEL_JOBS} builders"
 
@@ -186,8 +192,8 @@ stop_builders() {
 	sleep 3
 
 	cd /
-	mnt=`realpath ${JAILMNT}`
-	mount | awk -v mnt="${MASTERMNT}/" 'BEGIN{ gsub(/\//, "\\\/", mnt); } { if ($3 ~ mnt) { print $3 }}' |  sort -r | xargs umount || :
+	mnt=${MASTERMNT%/ref}
+	mount | awk -v mnt="${mnt}" '{ if ($3 ~ mnt && $3 !~ /\/ref/) { print $3 }}' |  sort -r | xargs umount || :
 
 	# No builders running, unset JOBS
 	JOBS=""
@@ -233,9 +239,6 @@ cleanup() {
 	fi
 
 	bset epoch "0"
-	for pid in $(jobs -p); do
-		killtree ${pid} 9 || :
-	done
 
 	if [ -d ${MASTERMNT}/poudriere/var/run ]; then
 		for pid in ${MASTERMNT}/poudriere/var/run/*.pid; do
@@ -246,24 +249,13 @@ cleanup() {
 	fi
 	wait
 
-	rm -rf ${PACKAGES}/.new_packages || :
 	jail_stop
 	export CLEANED_UP=1
 }
 
-jail_dismount() {
-	[ $# -ne 0 ] && eargs
-	local mnt
-
-	cd /
-	msg "Umounting file systems"
-	mnt=`realpath ${JAILMNT}`
-	mount | awk -v mnt="${mnt}" '{ if ($3 ~ mnt && $1 !~ /\/dev\/md/ ) { print $3 }}' |  sort -r | xargs umount -v || :
-}
-
 dismount() {
 	[ $# -ne 1 ] && eargs mountpoint
-	umount ${1} || :
+	umount ${1} 2>/dev/null || :
 }
 
 create_slave() {
@@ -288,6 +280,8 @@ create_slave() {
 	mount_tmpfs -s 100M  tmpfs ${mnt}/var
 	mount_tmpfs -s 64K   tmpfs ${mnt}/compat
 	mount_tmpfs -s 2500M tmpfs ${mnt}/usr/local
+	mount_tmpfs -s 1G    tmpfs ${mnt}/portdistfiles
+	mount_tmpfs -s 1500M tmpfs ${mnt}/new_packages
 	mkdir -p ${mnt}/compat/linprocfs \
 		 ${mnt}/compat/linux/proc \
 		 ${mnt}/compat/svr4
@@ -301,7 +295,7 @@ create_slave() {
 }
 
 destroy_slave() {
-	[ $# -ne 2 ] && eargs job-number
+	[ $# -ne 1 ] && eargs job-number
 	local task="${1}"
 	local mnt="${MASTERMNT%/ref}/${task}"
 
@@ -311,7 +305,7 @@ destroy_slave() {
 	# Repeat dismount attempts in case 1 or more failed
 	# This also helps reap mount on previous failed attempts
 	for x in 1 2; do
-	   [ ${x} -eq 1 ] && sleep 3
+	   sleep 3
 	   dismount ${mnt}/tmp
 	   dismount ${mnt}/wrkdirs
 	   dismount ${mnt}/etc
@@ -320,6 +314,8 @@ destroy_slave() {
 	   dismount ${mnt}/compat/srv4
 	   dismount ${mnt}/compat
 	   dismount ${mnt}/usr/local
+	   dismount ${mnt}/portdistfiles
+	   dismount ${mnt}/new_packages
 	done
 }
 
@@ -346,4 +342,10 @@ check_mount() {
 	local AWKCMD='{ if ($1 == mnt) print $3 }'
 	mount | awk -v mnt="${mnt}" "${AWKCMD}"
 	return 0
+}
+
+pid_active() {
+	[ $# -ne 1 ] && eargs pidfile
+	local mypid=$(cat ${1})
+	kill -0 ${mypid} 2>/dev/null
 }

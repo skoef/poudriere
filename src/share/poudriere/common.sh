@@ -835,7 +835,7 @@ check_fs_violation() {
 		msg "Error: ${err_msg}"
 		cat ${tmpfile}
 		bset ${MY_JOBID} status "${status_value}:${port}"
-		job_msg_verbose "Status for build ${port}: ${status_value}"
+		job_msg_verbose "Status   ${port}: ${status_value}"
 		ret=1
 	fi
 	rm -f ${tmpfile}
@@ -926,7 +926,7 @@ gather_distfiles() {
 	sub=$(injail make -C ${portdir} -VDIST_SUBDIR)
 	dists=$(injail make -C ${portdir} -V_DISTFILES -V_PATCHFILES)
 	specials=$(injail make -C ${portdir} -V_DEPEND_SPECIALS)
-	job_msg_verbose "Status for build ${portdir##/usr/ports/}: distfiles"
+	job_msg_verbose "Status   ${portdir##/usr/ports/}: distfiles"
 	for d in ${dists}; do
 		[ -f ${DISTFILES_CACHE}/${sub}/${d} ] || continue
 		echo ${DISTFILES_CACHE}/${sub}/${d}
@@ -983,19 +983,15 @@ _real_build_port() {
 	[ -z "${PORTTESTING}" ] && PORT_FLAGS="${PORT_FLAGS} NO_DEPENDS=yes"
 
 	for phase in ${targets}; do
-		[ -z "${no_stage}" ] && JUSER=${jailuser}
 		bset ${MY_JOBID} status "${phase}:${port}"
 		job_msg_verbose "Status   ${port}: ${phase}"
 		case ${phase} in
 		fetch)
-			jstop
-			jstart 1
-			JUSER=root
 			;;
 		extract)
-			chown -R ${JUSER} ${mnt}/wrkdirs
 			;;
-		*-depends|install-mtree) JUSER=root ;;
+		*-depends|install-mtree)
+			;;
 		configure) [ -n "${PORTTESTING}" ] && markfs prebuild ${mnt} ;;
 		${build_fs_violation_check_target})
 			if [ -n "${PORTTESTING}" ]; then
@@ -1008,7 +1004,6 @@ _real_build_port() {
 			;;
 		stage) [ -n "${PORTTESTING}" ] && markfs prestage ${mnt} ;;
 		install)
-			JUSER=root
 			[ -n "${PORTTESTING}" ] && markfs preinst ${mnt}
 			;;
 		package)
@@ -1021,7 +1016,6 @@ _real_build_port() {
 			fi
 			;;
 		deinstall)
-			JUSER=root
 			# Skip for all linux ports, they are not safe
 			if [ "${PKGNAME%%*linux*}" != "" ]; then
 				msg "Checking shared library dependencies"
@@ -1038,12 +1032,6 @@ _real_build_port() {
 		if [ "${phase}" = "package" ]; then
 			echo "PACKAGES=/new_packages" >> ${mnt}/etc/make.conf
 			# Create sandboxed staging dir for new package for this build
-			rm -rf "${PACKAGES}/.new_packages/${PKGNAME}"
-			mkdir -p "${PACKAGES}/.new_packages/${PKGNAME}"
-			${NULLMOUNT} \
-				"${PACKAGES}/.new_packages/${PKGNAME}" \
-				${mnt}/new_packages
-			chown -R ${JUSER} ${mnt}/new_packages
 		fi
 
 		if [ "${phase}" = "deinstall" ]; then
@@ -1161,7 +1149,6 @@ Try testport with -n to use PREFIX=LOCALBASE"
 		print_phase_footer
 
 		if [ "${phase}" = "checksum" ]; then
-			mkdir -p ${mnt}/portdistfiles
 			echo "DISTDIR=/portdistfiles" >> ${mnt}/etc/make.conf
 			gather_distfiles ${portdir} ${mnt}/portdistfiles || return 1
 		fi
@@ -1278,15 +1265,15 @@ Try testport with -n to use PREFIX=LOCALBASE"
 		fi
 	done
 
-	if [ -d "${PACKAGES}/.new_packages/${PKGNAME}" ]; then
+	if [ -d "${mnt}/new_packages/${PKGNAME}" ]; then
 		# everything was fine we can copy package the package to the package
 		# directory
-		find ${PACKAGES}/.new_packages/${PKGNAME} \
+		find ${mnt}/new_packages/${PKGNAME} \
 			-mindepth 1 \( -type f -or -type l \) | while read pkg_path; do
-			pkg_file=${pkg_path#${PACKAGES}/.new_packages/${PKGNAME}}
+			pkg_file=${pkg_path#${mnt}/new_packages/${PKGNAME}}
 			pkg_base=${pkg_file%/*}
 			mkdir -p ${PACKAGES}/${pkg_base}
-			mv ${pkg_path} ${PACKAGES}/${pkg_base}
+			mv ${pkg_path} ${mnt}/packages/${pkg_base}
 		done
 	fi
 
@@ -1294,11 +1281,10 @@ Try testport with -n to use PREFIX=LOCALBASE"
 	return 0
 }
 
-# Wrapper to ensure JUSER is reset and any other cleanup needed
+# Wrapper to ensure any other cleanup needed
 build_port() {
 	local ret
 	_real_build_port "$@" || ret=$?
-	JUSER=root
 	return ${ret}
 }
 
@@ -1409,7 +1395,7 @@ build_queue() {
 		for j in ${JOBS}; do
 			name="${MASTERNAME}-job-${j}"
 			if [ -f  "${MASTERMNT}/poudriere/var/run/${j}.pid" ]; then
-				if pgrep -qF "${MASTERMNT}/poudriere/var/run/${j}.pid" 2>/dev/null; then
+				if pid_active "${MASTERMNT}/poudriere/var/run/${j}.pid"; then
 					builders_active=1
 					continue
 				fi
@@ -1459,6 +1445,7 @@ build_queue() {
 
 		unset jobid; until trappedinfo=; read -t 30 jobid <&6 ||
 			[ -z "$trappedinfo" ]; do :; done
+
 	done
 	exec 6<&-
 	exec 6>&-
@@ -1633,7 +1620,7 @@ build_pkg() {
 	buildlog_start ${portdir}
 
 	# Ensure /dev/null exists (kern/139014)
-	[ ${JAILED} -eq 0 ] && devfs -m ${mnt}/dev rule apply path null unhide
+	#[ ${JAILED} -eq 0 ] && devfs -m ${mnt}/dev rule apply path null unhide
 
 	if [ -n "${ignore}" ]; then
 		msg "Ignoring ${port}: ${ignore}"
@@ -1691,16 +1678,14 @@ stop_build() {
 	local portdir="$1"
 	local mnt=$(my_path)
 
-	umount -f ${mnt}/new_packages 2>/dev/null || :
-	rm -rf "${PACKAGES}/.new_packages/${PKGNAME}"
-
-	# 2 = HEADER+ps itself
-	if [ $(injail ps aux | wc -l) -ne 2 ]; then
-		msg "Leftover processes:"
-		injail ps auxwwd | grep -v 'ps auxwwd'
-	fi
+	### INVALID (and deadly) for CHROOT; it's jail code only!
+	# #2 = HEADER+ps itself
+	# if [ $(injail ps aux | wc -l) -ne 2 ]; then
+	#	msg "Leftover processes:"
+	#	injail ps auxwwR | grep -v 'ps auxwwR'
+	# fi
 	# Always kill to avoid missing anything
-	injail kill -9 -1 2>/dev/null || :
+	# injail kill -9 -1 2>/dev/null || :
 
 	buildlog_stop ${portdir}
 	log_stop
@@ -2285,7 +2270,11 @@ parallel_stop() {
 
 parallel_shutdown() {
 	# Kill all children instead of waiting on them
-	[ -n "${PARALLEL_PIDS}" ] && kill -9 ${PARALLEL_PIDS} 2>/dev/null || :
+	if [ -n "${PARALLEL_PIDS}" ]; then
+		for mypid in ${PARALLEL_PIDS}; do
+			killtree ${mypid} 9 || :
+		done
+	fi
 	parallel_stop 2>/dev/null || :
 }
 
