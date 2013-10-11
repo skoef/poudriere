@@ -218,8 +218,11 @@ buildlog_stop() {
 	local log=$(log_path)
 	local buildtime
 
+	# %B doesn't exist on DF and will not.
+	# So far, %c is giving the correct answer, but if it starts failing
+	# we can use awk to get the times from the log itself.
 	buildtime=$( \
-		stat -f '%N %B' ${log}/logs/${PKGNAME}.log  | awk -v now=$(date +%s) \
+		stat -f '%N %c' ${log}/logs/${PKGNAME}.log  | awk -v now=$(date +%s) \
 		-f ${AWKPREFIX}/siginfo_buildtime.awk |
 		awk -F'!' '{print $2}' \
 	)
@@ -2021,7 +2024,8 @@ next_in_queue() {
 	local p pkgname
 
 	[ ! -d ${MASTERMNT}/poudriere/pool ] && err 1 "Build pool is missing"
-	p=$(find ${POOL_BUCKET_DIRS} -type d -depth 1 -empty -print -quit || :)
+	#p=$(find ${POOL_BUCKET_DIRS} -type d -depth 1 -empty -print -quit || :)
+	p=$(find ${POOL_BUCKET_DIRS} -type d -depth 1 -empty -print || :)
 	[ -n "$p" ] || return 0
 	pkgname=${p##*/}
 	mv ${p} ${MASTERMNT}/poudriere/building/${pkgname}

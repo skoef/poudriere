@@ -110,7 +110,8 @@ daemon_cleanup() {
 }
 
 while :; do
-	next=$(find ${WATCHDIR} -type f -depth 1 -print -quit 2>/dev/null)
+	#next=$(find ${WATCHDIR} -type f -depth 1 -print -quit 2>/dev/null)
+	next=$(find ${WATCHDIR} -type f -depth 1 -print 2>/dev/null)
 	if [ -z "${next}" ]; then
 		dirwatch ${WATCHDIR}
 		if [ $? -ne 0 ]; then
