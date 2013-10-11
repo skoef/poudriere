@@ -369,6 +369,7 @@ siginfo_handler() {
 	local j
 	local pkgname origin phase buildtime
 	local format_origin_phase format_phase
+	local copystatus=${status}
 
 	[ -n "${nbq}" ] || return 0
 	[ "${status}" = "index:" -o "${status}" = "crashed:" ] && return 0
@@ -418,7 +419,7 @@ siginfo_handler() {
 	fi
 
 	show_log_info
-	printf "[${MASTERNAME}] [${status}] [%0${queue_width}d/%0${queue_width}d]\nBuilt: %-${queue_width}d Failed: %-${queue_width}d  Ignored: %-${queue_width}d  Skipped: %-${queue_width}d\n" \
+	printf "[${MASTERNAME}] [${copystatus}] [%0${queue_width}d/%0${queue_width}d]\nBuilt: %-${queue_width}d Failed: %-${queue_width}d  Ignored: %-${queue_width}d  Skipped: %-${queue_width}d\n" \
 	  ${ndone} ${nbq} ${nbb} ${nbf} ${nbi} ${nbs}
 }
 
@@ -544,7 +545,6 @@ markfs() {
 	case "${name}" in
 		prepkg|poststage)
 			cat > ${mnt}/poudriere/mtree.${name}exclude << EOF
-.${HOME}/.ccache/*
 ./compat/linux/proc
 ./dev/*
 ./distfiles/*
@@ -552,6 +552,7 @@ markfs() {
 ./packages/*
 ./poudriere/*
 ./proc/*
+./root/.ccache/*
 ./usr/ports/*
 ./usr/src
 ./var/db/ports/*
@@ -560,7 +561,6 @@ EOF
 			;;
 		prebuild|prestage)
 			cat > ${mnt}/poudriere/mtree.${name}exclude << EOF
-.${HOME}/.ccache/*
 ./compat/linux/proc
 ./dev/*
 ./distfiles/*
@@ -568,6 +568,7 @@ EOF
 ./packages/*
 ./poudriere/*
 ./proc/*
+./root/.ccache/*
 ./tmp/*
 ./usr/ports/*
 ./usr/src
@@ -577,8 +578,6 @@ EOF
 			;;
 		preinst)
 			cat >  ${mnt}/poudriere/mtree.${name}exclude << EOF
-.${HOME}/*
-.${HOME}/.ccache/*
 ./compat/linux/proc/*
 ./dev/*
 ./distfiles/*
@@ -588,6 +587,8 @@ EOF
 ./etc/master.passwd
 ./etc/passwd
 ./etc/pwd.db
+./root/*
+./root/.ccache/*
 ./etc/shells
 ./etc/spwd.db
 ./new_packages/*
@@ -663,7 +664,7 @@ do_portbuild_mounts() {
 
 	mkdir -p ${PACKAGES}/All
 	[ -d "${CCACHE_DIR:-/nonexistent}" ] &&
-		${NULLMOUNT} ${CCACHE_DIR} ${mnt}${HOME}/.ccache
+		${NULLMOUNT} ${CCACHE_DIR} ${mnt}/root/.ccache
 	[ -n "${MFSSIZE}" ] && mdmfs -t -S -o async -s ${MFSSIZE} md ${mnt}/wrkdirs
 	[ ${TMPFS_WRKDIR} -eq 1 ] && mount -t tmpfs tmpfs ${mnt}/wrkdirs
 	# Only show mounting messages once, not for every builder

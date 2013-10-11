@@ -79,8 +79,9 @@ jail_start() {
 	      ${MASTERMNT}/usr/local
 
 	if [ -d "${CCACHE_DIR:-/nonexistent}" ]; then
+		mkdir ${MASTERMNT}/root/.ccache
 		echo "WITH_CCACHE_BUILD=yes" >> ${MASTERMNT}/etc/make.conf
-		echo "CCACHE_DIR=${HOME}/.ccache" >> ${MASTERMNT}/etc/make.conf
+		echo "CCACHE_DIR=/root/.ccache" >> ${MASTERMNT}/etc/make.conf
 	fi
 	echo "PORTSDIR=/usr/ports" >> ${MASTERMNT}/etc/make.conf
 	echo "PACKAGES=/packages" >> ${MASTERMNT}/etc/make.conf
@@ -194,7 +195,7 @@ stop_builders() {
 	cd /
 	mnt=${MASTERMNT%/ref}
 	mount | awk -v mnt="${mnt}" '{ if ($3 ~ mnt && $3 !~ /\/ref/) { print $3 }}' |  sort -r | xargs umount || :
-	mount | awk -v mnt="${MASTERMNT}" '{ if ($3 ~ mnt) ${ print $3 }}' | xargs umount || :
+	mount | awk -v mnt="${MASTERMNT}" '{ if ($3 ~ mnt) { print $3 }}' | xargs umount || :
 
 	# No builders running, unset JOBS
 	JOBS=""
