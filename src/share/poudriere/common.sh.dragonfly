@@ -249,6 +249,7 @@ cleanup() {
 	[ -n "${CLEANED_UP}" ] && return 0
 	# Prevent recursive cleanup on error
 	if [ -n "${CLEANING_UP}" ]; then
+		[ -n "${INTERACTIVE_MODE}" -a ${INTERACTIVE_MODE} -eq 2 ] && return
 		echo "Failure cleaning up. Giving up." >&2
 		return
 	fi
