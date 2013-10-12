@@ -1514,8 +1514,12 @@ json_main() {
 
 build_json() {
 	local log=$(log_path)
+	local pf=${log}/.poudriere
+	local awklist="${pf}.ports.* ${pf}.stat* ${pf}.setname \
+		${pf}.ptname ${pf}.jailname ${pf}.mastername \
+		${pf}.builders ${pf}.buildname"
 	awk \
-		-f ${AWKPREFIX}/json.awk ${log}/.poudriere.* | \
+		-f ${AWKPREFIX}/json.awk ${awklist} | \
 		awk 'ORS=""; {print}' | \
 		sed  -e 's/,\([]}]\)/\1/g' \
 		> ${log}/.data.json.tmp
@@ -1523,7 +1527,7 @@ build_json() {
 
 	# Build mini json for stats
 	awk -v mini=yes \
-		-f ${AWKPREFIX}/json.awk ${log}/.poudriere.* | \
+		-f ${AWKPREFIX}/json.awk ${awklist} | \
 		awk 'ORS=""; {print}' | \
 		sed  -e 's/,\([]}]\)/\1/g' \
 		> ${log}/.data.mini.json.tmp
