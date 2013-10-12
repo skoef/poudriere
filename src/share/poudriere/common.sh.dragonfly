@@ -187,7 +187,7 @@ stop_builders() {
 	local mnt
 
 	# wait for the last running processes
-	#cat ${MASTERMNT}/poudriere/var/run/*.pid 2>/dev/null | xargs pwait 2>/dev/null
+	cat ${MASTERMNT}/poudriere/var/run/*.pid 2>/dev/null | xargs pwait 2>/dev/null
 
 	msg "Stopping ${PARALLEL_JOBS} builders"
 
@@ -355,6 +355,5 @@ check_mount() {
 
 pid_active() {
 	[ $# -ne 1 ] && eargs pidfile
-	local mypid=$(cat ${1})
-	kill -0 ${mypid} 2>/dev/null
+	pgrep -F ${1}
 }

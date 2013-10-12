@@ -96,7 +96,7 @@ if [ -z "${DAEMON_ARGS_PARSED}" ]; then
 		daemon -f -p ${PIDFILE} env -i PATH=${PATH} DAEMON_ARGS_PARSED=1 $0 || exit 1
 		exit 0
 	else
-		pid_active ${PIDFILE} && err 1 "poudriere daemon is already running"
+		pgrep -F ${PIDFILE} && err 1 "poudriere daemon is already running"
 		echo "$$" > ${PIDFILE}
 	fi
 fi
@@ -110,8 +110,7 @@ daemon_cleanup() {
 }
 
 while :; do
-	#next=$(find ${WATCHDIR} -type f -depth 1 -print -quit 2>/dev/null)
-	next=$(find ${WATCHDIR} -type f -depth 1 -print 2>/dev/null)
+	next=$(find ${WATCHDIR} -type f -depth 1 -print -quit 2>/dev/null)
 	if [ -z "${next}" ]; then
 		dirwatch ${WATCHDIR}
 		if [ $? -ne 0 ]; then
