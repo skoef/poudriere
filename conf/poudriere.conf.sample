@@ -109,9 +109,10 @@ DPORTS_URL=git://github.com/jrmarino/DPorts.git
 # Set the localhost path for rsync (cpdup) to update dports repository
 # DPORTS_RSYNC_LOC=/home/automaton/merged-ports
 
-# HSTJ (Half the slaves, twice the jobs)
-# To configure a 12-core machine as 6 slaves, 2 jobs each, set
-# ALLOW_MAKE_JOBS=yes and JOBS_LIMIT=2 (or =3 for 4x3)
+# If PARALLEL_JOBS is not set, but JOBS_LIMIT is, the default value for
+# PARALLEL_JOBS will be Number-of-CPUs / JOBS limit
+# For example, a 12-core machine would set the PARALLEL_JOBS to 6
+# if JOBS_LIMIT was defined as 2 while PARALLEL_JOBS was unset.
 # JOBS_LIMIT=2
 
 # By default MAKE_JOBS is disabled to allow only one process per cpu
