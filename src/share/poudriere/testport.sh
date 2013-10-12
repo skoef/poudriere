@@ -127,8 +127,7 @@ prepare_ports
 
 log=$(log_path)
 
-run_hook test_port_start "${JAILNAME}" "${PTNAME}" "${MASTERMNT}/usr/ports/${ORIGIN}" \
-	`bget stats_queued`
+run_hook testport_started ORIGIN=${ORIGIN}
 
 POUDRIERE_BUILD_TYPE=bulk parallel_build ${JAILNAME} ${PTNAME} ${SETNAME}
 if [ $(bget stats_failed) -gt 0 ] || [ $(bget stats_skipped) -gt 0 ]; then
@@ -143,7 +142,13 @@ if [ $(bget stats_failed) -gt 0 ] || [ $(bget stats_skipped) -gt 0 ]; then
 	msg "Failed ports: ${failed}"
 	[ -n "${skipped}" ] && 	msg "Skipped ports: ${skipped}"
 
+	run_hook testport_bulk_failed \
+		BULK_PORTS_FAILED=${failed} \
+		BULK_PORTS_SKIPPED=${skipped}
 	exit 1
+else
+	run_hook testport_bulk_success \
+		BULK_PORTS_BUILT=$(bget stats_built)
 fi
 
 
@@ -186,7 +191,10 @@ if ! build_port /usr/ports/${ORIGIN}; then
 
 	save_wrkdir ${MASTERMNT} "${PKGNAME}" "/usr/ports/${ORIGIN}" "${failed_phase}" || :
 	build_result=0
-	run_hook port_build_failure "${JAILNAME}" "${PTNAME}" "${MASTERMNT}/usr/ports/${ORIGIN}" "${failed_phase}"
+	run_hook testport_test_failed \
+		ORIGIN=${ORIGIN} \
+		STATUS=${failed_status} \
+		PHASE=${failed_phase}
 
 	ln -s ../${PKGNAME}.log ${log}/logs/errors/${PKGNAME}.log
 	errortype=$(${SCRIPTPREFIX}/processonelog.sh \
@@ -207,7 +215,7 @@ else
 	fi
 	update_stats
 	build_result=1
-	run_hook port_build_success "${JAILNAME}" "${PTNAME}" "${MASTERMNT}/usr/ports/${ORIGIN}"
+	run_hook testport_test_success ORIGIN=${ORIGIN}
 fi
 
 if [ -f ${MASTERMNT}/tmp/pkgs/${PKGNAME}.${PKG_EXT} ]; then
@@ -276,8 +284,9 @@ stop_build /usr/ports/${ORIGIN}
 
 cleanup
 set +e
-run_hook test_port_ended "${JAILNAME}" "${PTNAME}" "${MASTERMNT}/usr/ports/${ORIGIN}" \
-	`bget stats_built` `bget stats_failed` `bget stats_ignored` \
-	`bget stats_skipped` "${build_result}"
 
+run_hook testport_ended \
+	ORIGIN=${ORIGIN} \
+	RESULT=${build_result}
+	
 exit 0

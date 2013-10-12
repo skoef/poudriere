@@ -159,8 +159,6 @@ check_jobs
 
 export POUDRIERE_BUILD_TYPE=bulk
 
-run_hook bulk start
-
 read_packages_from_params "$@"
 
 jail_start ${JAILNAME} ${PTNAME} ${SETNAME}
@@ -173,7 +171,7 @@ fi
 
 prepare_ports
 
-run_hook bulk_build_start "${JAILNAME}" "${PTNAME}" `bget stats_queued`
+run_hook bulk_started PORTS_QUEUED=$(bget stats_queued)
 
 bset status "building:"
 
@@ -235,12 +233,15 @@ if [ $nbskipped -gt 0 ]; then
 	echo ${skipped}
 	echo ""
 fi
-run_hook bulk done ${nbbuilt} ${nbfailed} ${nbignored} ${nbskipped}
+run_hook bulk_ended \
+	PORTS_BUILT=${nbbuilt} \
+	PORTS_FAILED=${nbfailed} \
+	PORTS_IGNORED=${nbignord} \
+	PORTS_SKIPPED=${nbskipped}
+
 msg "[${MASTERNAME}] $nbbuilt packages built, $nbfailed failures, $nbignored ignored, $nbskipped skipped"
 show_log_info
 
 set +e
-run_hook bulk_build_ended "${JAILNAME}" "${PTNAME}" "${nbbuilt}" \
-	"${nbfailed}" "${nbignored}" "${nbskipped}"
 
 exit $((nbfailed + nbskipped))

@@ -120,6 +120,7 @@ run_hook() {
 	shift
 
 	[ -f ${hookfile} ] &&
+		env $@ \
 		URL_BASE="${URL_BASE}" \
 		POUDRIERE_BUILD_TYPE=${POUDRIERE_BUILD_TYPE} \
 		POUDRIERED="${POUDRIERED}" \
@@ -131,7 +132,7 @@ run_hook() {
 		SETNAME="${SETNAME}" \
 		PACKAGES="${PACKAGES}" \
 		PACKAGES_ROOT="${PACKAGES_ROOT}" \
-		/bin/sh ${hookfile} "$@"
+		/bin/sh ${hookfile}
 	return 0
 }
 
@@ -1604,7 +1605,10 @@ clean_pool() {
 		skipped_origin=$(cache_get_origin "${skipped_pkgname}")
 		badd ports.skipped "${skipped_origin} ${skipped_pkgname} ${pkgname}"
 		job_msg "Skipping build of ${skipped_origin}: Dependent port ${port} failed"
-		run_hook pkgbuild skipped "${skipped_origin}" "${skipped_pkgname}" "${port}"
+		run_hook pkgbuild RESULT=skipped \
+			ORIGIN="${port}" \
+			SKIPPED_ORIGIN="${skipped_origin}"
+			SKIPPED_PKGNAME="${skipped_pkgname}"
 	done
 
 	balance_pool
@@ -1672,7 +1676,10 @@ build_pkg() {
 		badd ports.ignored "${port} ${PKGNAME} ${ignore}"
 		job_msg "Finished build of ${port}: Ignored: ${ignore}"
 		clean_rdepends=1
-		run_hook pkgbuild ignored "${port}" "${PKGNAME}" "${ignore}"
+		run_hook pkgbuild RESULT=ignored \
+			ORIGIN="${port}" \
+			IGNORED_PKGNAME="${PKGNAME}"
+			IGNORED_REASON="${ignore}"
 	else
 		injail make -C ${portdir} clean
 		if ! build_port ${portdir}; then
@@ -1690,7 +1697,9 @@ build_pkg() {
 		if [ ${build_failed} -eq 0 ]; then
 			badd ports.built "${port} ${PKGNAME}"
 			job_msg "Finished ${port}: Success"
-			run_hook pkgbuild success "${port}" "${PKGNAME}"
+			run_hook pkgbuild RESULT=success \
+				ORIGIN="${port}" \
+				PKGNAME="${PKGNAME}"
 			# Cache information for next run
 			pkg_cache_data "${PACKAGES}/All/${PKGNAME}.${PKG_EXT}" ${port} || :
 		else
@@ -1702,8 +1711,11 @@ build_pkg() {
 			badd ports.failed "${port} ${PKGNAME} ${failed_phase} ${errortype}"
 			echo "${port} ${failed_phase}" >> $(log_path)/last_run.failed
 			job_msg "Finished ${port}: Failed: ${failed_phase}"
-			run_hook pkgbuild failed "${port}" "${PKGNAME}" "${failed_phase}" \
-				"${log}/logs/errors/${PKGNAME}.log"
+			run_hook pkgbuild RESULT=failed \
+				ORIGIN="${port}" \
+				PKGNAME="${PKGNAME}" \
+				FAIL_PHASE="${failed_phase}" \
+				FAIL_LOG="${log}/logs/errors/${PKGNAME}.log"
 			clean_rdepends=1
 		fi
 	fi
