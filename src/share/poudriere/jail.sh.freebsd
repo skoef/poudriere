@@ -436,3 +436,13 @@ EOF
 	unset CLEANUP_HOOK
 	msg "Jail ${JAILNAME} ${VERSION} ${ARCH} is ready to be used"
 }
+
+start_a_jail() {
+	export SET_STATUS_ON_START=0
+	export MASTERNAME=${JAILNAME}-${PTNAME}${SETNAME:+-${SETNAME}}
+	export MASTERMNT=${POUDRIERE_DATA}/build/${MASTERNAME}/ref
+	jail_start ${JAILNAME} ${PTNAME} ${SETNAME}
+	jstop
+	# Restart with network
+	jstart 1
+}

@@ -220,9 +220,9 @@ case "${CREATE}${LIST}${STOP}${START}${DELETE}${UPDATE}" in
 		# -k stop option not supported on DF
 		;;
 	000100)
-		export SET_STATUS_ON_START=0
 		test -z ${JAILNAME} && usage
-		# TODO: Set up CHROOT
+		porttree_exists ${PTNAME} || err 2 "No such ports tree ${PTNAME}"
+		start_a_jail
 		;;
 	000010)
 		test -z ${JAILNAME} && usage
