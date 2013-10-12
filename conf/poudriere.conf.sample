@@ -115,6 +115,13 @@ DPORTS_URL=git://github.com/jrmarino/DPorts.git
 # if JOBS_LIMIT was defined as 2 while PARALLEL_JOBS was unset.
 # JOBS_LIMIT=2
 
+# By default, individual distfiles are copied into a sandbox from the
+# DISTFILES_CACHE to catch ports that don't properly specify their own
+# distfiles.  Similarly, packages are created in /new_packages in its jail, 
+# and then copied to the collective package area.  Both cost tmpfs resources,
+# so set LESS_SANDBOXING=yes to use the collective areas directly.
+# LESS_SANDBOXING=yes
+
 # By default MAKE_JOBS is disabled to allow only one process per cpu
 # Use the following to allow it anyway
 # ALLOW_MAKE_JOBS=yes
@@ -127,7 +134,6 @@ DPORTS_URL=git://github.com/jrmarino/DPorts.git
 # This will be used for giving URL hints to the HTML output when
 # scheduling and starting builds
 #URL_BASE=http://yourdomain.com/poudriere/
-
 
 # This defines the max time (in seconds) that a command may run for a build
 # before it is killed for taking too long. Default: 86400

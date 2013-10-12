@@ -1080,7 +1080,7 @@ _real_build_port() {
 
 		print_phase_header ${phase}
 
-		if [ "${phase}" = "package" ]; then
+		if [ "${phase}" = "package" -a "${LESS_SANDBOXING}" = "no" ]; then
 			echo "PACKAGES=/new_packages" >> ${mnt}/etc/make.conf
 			# Create sandboxed staging dir for new package for this build
 		fi
@@ -1199,7 +1199,8 @@ Try testport with -n to use PREFIX=LOCALBASE"
 		fi
 		print_phase_footer
 
-		if [ "${phase}" = "checksum" ]; then
+		if [ "${phase}" = "checksum" -a "${LESS_SANDBOXING}" = "no" ]; then
+		
 			echo "DISTDIR=/portdistfiles" >> ${mnt}/etc/make.conf
 			gather_distfiles ${portdir} ${mnt}/portdistfiles || return 1
 		fi
@@ -1318,10 +1319,12 @@ Try testport with -n to use PREFIX=LOCALBASE"
 
 	# everything was fine we can copy package the package to the package
 	# directory.  The "All" and "Latest" directories are guaranteed to exist
-	find ${mnt}/new_packages/All -type f \
-		-exec mv {} ${mnt}/packages/All \;
-	find ${mnt}/new_packages/Latest -type l \
-		-exec mv {} {mnt}/packages/Latest \;
+	if [ "${LESS_SANDBOXING}" = "no" ]; then
+		find ${mnt}/new_packages/All -type f \
+			-exec mv {} ${mnt}/packages/All \;
+		find ${mnt}/new_packages/Latest -type l \
+			-exec mv {} {mnt}/packages/Latest \;
+	fi
 
 	bset ${MY_JOBID} status "idle:"
 	return 0
@@ -2851,6 +2854,7 @@ esac
 # 120 minutes with no log update
 : ${NOHANG_TIME:=7200}
 : ${PATCHED_FS_KERNEL:=no}
+: ${LESS_SANDBOXING:=no}
 
 BUILDNAME=$(date +%Y%m%d_%H%M%S)
 
