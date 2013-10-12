@@ -109,9 +109,6 @@ DPORTS_URL=git://github.com/jrmarino/DPorts.git
 # Set the localhost path for rsync (cpdup) to update dports repository
 # DPORTS_RSYNC_LOC=/home/automaton/merged-ports
 
-# Where to look for hook scripts (default /usr/local/etc/hooks_poudriere)
-# HOOKDIR=/usr/local/etc/hooks_poudriere
-
 # HSTJ (Half the slaves, twice the jobs)
 # To configure a 12-core machine as 6 slaves, 2 jobs each, set
 # ALLOW_MAKE_JOBS=yes and JOBS_LIMIT=2 (or =3 for 4x3)
