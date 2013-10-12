@@ -80,57 +80,63 @@ done
 
 MASTERNAME=${JAILNAME}-${PTNAME}${SETNAME:+-${SETNAME}}
 MASTERMNT=${POUDRIERE_DATA}/build/${MASTERNAME}/ref
+BUILDNAME=latest
+POUDRIERE_BUILD_TYPE=bulk
 
-export MASTERNAME
-export MASTERMNT
+export MASTERNAME MASTERMNT BUILDNAME POUDRIERE_BUILD_TYPE
 
-list_jail_info () {
-	[ $# -ne 2 ] && eargs num_queued num_to_build
-	local EPOCH
-	local building_started
+info_jail() {
+	local nbb nbf nbi nbq nbs tobuild EPOCH
+	local building_started status
 	local elapsed elapsed_days elapsed_hms elapsed_timestamp
-	echo "Jailname:              $(jget name)"
-	echo "BSD version:           $(jget version)"
-	echo "BSD arch:              $(jget arch)"
-	echo "Install/update method: $(jget method)"
-	echo "World built:           $(bget timestamp)"
-	echo "Status:                $(bget status)"
-	EPOCH=$(zget epoch)
+	local ahora=$(date "+%s")
+	jail_exists ${JAILNAME} || err 1 "No such jail: ${JAILNAME}"
+	porttree_exists ${PTNAME} || err 1 "No such tree: ${PTNAME}"
+	
+	status=$(bget status 2>/dev/null || :)
+	nbq=$(bget stats_queued 2>/dev/null || :)
+	nbf=$(bget stats_failed 2>/dev/null || :)
+	nbi=$(bget stats_ignored 2>/dev/null || :)
+	nbs=$(bget stats_skipped 2>/dev/null || :)
+	nbb=$(bget stats_built 2>/dev/null || :)
+	EPOCH=$(bget epoch 2>/dev/null || :)
+	tobuild=$((nbq - nbb - nbf - nbi - nbs))
+
+	echo "Jail name:         ${JAILNAME}"
+	echo "Jail version:      $(jget ${JAILNAME} version)"
+	echo "Jail arch:         $(jget ${JAILNAME} arch)"
+	echo "Jail acquired:     $(jget ${JAILNAME} method)"
+	echo "Jail built:        $(jget ${JAILNAME} timestamp)"
+	echo "Tree name:         ${PTNAME}"
+	echo "Tree acquired:     $(pget ${PTNAME} method)"
+	echo "Tree updated:      $(pget ${PTNAME} timestamp)"
+	echo "Status:            ${status}"
 	if [ "${EPOCH}" != "-" -a "${EPOCH}" != "0" ]; then
 	   building_started=$(date -j -r ${EPOCH} "+%Y-%m-%d %H:%M:%S")
-	   elapsed=$(expr `date "+%s"` - ${EPOCH})
-	   elapsed_days=$(expr ${elapsed} / 86400)
+	   elapsed=$((ahora-EPOCH))
+	   elapsed_days=$((elapsed/86400))
 	   elapsed_hms=$(date -j -u -r ${elapsed} "+%H:%M:%S")
 	   case ${elapsed_days} in
 	     0) elapsed_timestamp="${elapsed_hms}" ;;
 	     1) elapsed_timestamp="1 day, ${elapsed_hms}" ;;
 	     *) elapsed_timestamp="${elapsed_days} days, ${elapsed_hms}" ;;
 	   esac
-	   echo "Building started:      ${building_started}"
-	   echo "Elapsed time:          ${elapsed_timestamp}"
+	   echo "Building started:  ${building_started}"
+	   echo "Elapsed time:      ${elapsed_timestamp}"
 	fi
-	echo "Packages built:        $(bget stats_built)"
-	echo "Packages failed:       $(bget stats_failed)"
-	echo "Packages ignored:      $(bget stats_ignored)"
-	echo "Packages skipped:      $(bget stats_skipped)"
-	echo "Packages queued:       ${1}"
-	echo "Packages to be built:  ${2}"
-}
-
-info_jail() {
-	jail_exists ${JAILNAME} || err 1 "No such jail: ${JAILNAME}"
-	nbb=$(bget stats_built|sed -e 's|-|0|g')
-	nbf=$(bget stats_failed|sed -e 's|-|0|g')
-	nbi=$(bget stats_ignored|sed -e 's|-|0|g')
-	nbs=$(bget stats_skipped|sed -e 's|-|0|g')
-	nbq=$(bget stats_queued|sed -e 's|-|0|g')
-	tobuild=$((nbq - nbb - nbf - nbi - nbs))
-	list_jail_info ${nbq} ${tobuild}
+	echo "Packages built:    ${nbb}"
+	echo "Packages failed:   ${nbf}"
+	echo "Packages ignored:  ${nbi}"
+	echo "Packages skipped:  ${nbs}"
+	echo "Packages total:    ${nbq}"
+	echo "Packages left:     ${tobuild}"
 }
 
 jail_dismount() {
 	[ $# -ne 0 ] && eargs
 	local mnt
+	jail_exists ${JAILNAME} || err 1 "No such jail: ${JAILNAME}"
+	porttree_exists ${PTNAME} || err 1 "No such tree: ${PTNAME}"
 
 	cd /
 	msg "Umounting file systems"
