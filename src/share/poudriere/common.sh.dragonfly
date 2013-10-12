@@ -72,11 +72,14 @@ jail_start() {
 	msg_n "Creating the reference jail..."
 
 	cpdup -x -VV -i0 ${mnt}/ ${MASTERMNT}/
-	mkdir ${MASTERMNT}/packages \
-	      ${MASTERMNT}/distfiles \
-	      ${MASTERMNT}/new_packages \
-	      ${MASTERMNT}/portdistfiles \
-	      ${MASTERMNT}/usr/local
+	mkdir -p 	${MASTERMNT}/compat/linprocfs \
+			${MASTERMNT}/compat/linux/proc \
+			${MASTERMNT}/compat/svr4 \
+			${MASTERMNT}/distfiles \
+			${MASTERMNT}/new_packages \
+			${MASTERMNT}/packages \
+			${MASTERMNT}/portdistfiles \
+			${MASTERMNT}/usr/local
 
 	if [ -d "${CCACHE_DIR:-/nonexistent}" ]; then
 		mkdir ${MASTERMNT}/root/.ccache
@@ -124,7 +127,9 @@ jail_start() {
 
 jail_stop() {
 	[ $# -ne 0 ] && eargs
-	local mnt
+	local mnt rem
+	local AWKCMD1='{ if ($3 ~ mnt && $3 !~ /\/ref/) { print $3 }}'
+	local AWKCMD2='{ if ($3 ~ mnt) { print $3 }}'
 
 	# err() will set status to 'crashed', don't override
 	[ -n "${CRASHED}" ] || bset status "stop:" 2>/dev/null || :
@@ -132,7 +137,24 @@ jail_stop() {
 	cd /
 	msg "Umounting file systems"
 	mnt=${MASTERMNT%/ref}
-	mount | awk -v mnt="${mnt}" '{ if ($3 ~ mnt) { print $3 }}' |  sort -r | xargs umount || :
+	mount | awk -v mnt="${mnt}" "${AWKCMD1}" |  sort -r | xargs umount || :
+	
+	# We don't want to continue umounting /ref if had any failures so
+	# far.  Let's check for mounts, and try 3 more times with 30 second
+	# intervals
+	
+	for verify in A B C; do
+		rem=$(mount | awk -v mnt="${mnt}" "${AWKCMD1}" | sort -r)
+		if [ -z "${rem}" ]; then
+		    break
+		else
+		    msg "Umounting not entirely successful.  Trying again in 30 seconds."
+		    sleep 30
+		    umount ${rem} || :
+		fi
+	done
+	
+	mount | awk -v mnt="${mnt}" "${AWKCMD2}" |  sort -r | xargs umount || :
 
 	export STATUS=0
 }
@@ -283,13 +305,9 @@ create_slave() {
 	mount_tmpfs -s 7G    tmfps ${mnt}/wrkdirs
 	mount_tmpfs -s 12M   tmpfs ${mnt}/etc
 	mount_tmpfs -s 100M  tmpfs ${mnt}/var
-	mount_tmpfs -s 64K   tmpfs ${mnt}/compat
 	mount_tmpfs -s 2500M tmpfs ${mnt}/usr/local
 	mount_tmpfs -s 1G    tmpfs ${mnt}/portdistfiles
 	mount_tmpfs -s 1500M tmpfs ${mnt}/new_packages
-	mkdir -p ${mnt}/compat/linprocfs \
-		 ${mnt}/compat/linux/proc \
-		 ${mnt}/compat/svr4
 	cp -a ${mnt}/etc2/* ${mnt}/etc/
 	cp -a ${mnt}/var2/* ${mnt}/var/
 
@@ -335,13 +353,13 @@ killtree() {
 	local _children
 
 	# stop parent from attempting to folk
-	kill -17 ${_pid} 2>/dev/null
-	if [ $? -eq 0 ]; then
+	if kill -17 ${_pid} 2>/dev/null; then
 	   _children=$(pgrep -P ${_pid})
 	   for _child in ${children}; do
 	      killtree ${_child} ${_sig}
 	   done
 	   kill -${_sig} ${_pid}
+	   pwait ${_pid} 2>/dev/null || :
 	fi
 }
 
@@ -355,5 +373,5 @@ check_mount() {
 
 pid_active() {
 	[ $# -ne 1 ] && eargs pidfile
-	pgrep -F ${1}
+	pgrep -q -F ${1}
 }

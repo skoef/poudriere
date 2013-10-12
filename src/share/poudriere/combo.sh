@@ -135,6 +135,7 @@ jail_dismount() {
 	cd /
 	msg "Umounting file systems"
 	mnt=${MASTERMNT%/ref}
+	mount | awk -v mnt="${mnt}" '{ if ($3 ~ mnt && $3 !~ /\/ref/) { print $3 }}' |  sort -r | xargs umount -v || :
 	mount | awk -v mnt="${mnt}" '{ if ($3 ~ mnt) { print $3 }}' |  sort -r | xargs umount -v || :
 }
 
