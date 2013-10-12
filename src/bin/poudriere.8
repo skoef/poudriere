@@ -29,7 +29,7 @@
 .\" change is made to the manual page.
 .Dd October 11, 2013
 .Dt POUDRIERE 8
-.Os FreeBSD
+.Os
 .Sh NAME
 .Nm poudriere
 .Nd bulk package builder and port tester
@@ -159,7 +159,7 @@ This argument specifies how many
 .Ar number
 jobs will run in parallel for a bulk build.
 .It Fl N
-Do not build package repository or INDEX when build is completed.
+Build package repository when build is completed.
 .It Fl p Ar tree
 This flag specifies on which ports
 .Ar tree
@@ -203,9 +203,7 @@ Deletes a jail.
 .It Fl l
 List all available jails.
 .It Fl s
-Starts a jail.
-.It Fl k
-Kills a jail (stops it).
+Starts a jail (chroot).
 .It Fl u
 Update a jail using full buildworld.
 .El
@@ -241,10 +239,6 @@ Specifies which
 .Ar version
 of
 .Dx to use in the jail, e.g. "3.4", "3.6", or "master"
-.It Fl f Ar filesystem
-Specifies the
-.Ar filesystem
-name ($BASEFS/worlds/myjail).
 .It Fl M Ar mountpoint
 Gives an alternative
 .Ar mountpoint
@@ -312,10 +306,10 @@ Otherwise, it has no effect.
 Specifies the
 .Ar name
 of the ports tree to use.
-.It Fl f Ar filesystem
-Specifies the
-.Ar filesystem
-name ($BASEFS/dport_trees/mytree).
+.It Fl M Ar mountpoint
+Gives an alternative
+.Ar mountpoint
+when creating ports tree.
 .It Fl m Ar method
 Specifies which
 .Ar method
@@ -356,9 +350,8 @@ environment variable will be set so that
 will be able to be used with any existing packages built for the jail.
 .It Fl I
 Advanced Interactive mode.
-Leaves jail running with port installed after test.
-When done with the jail you will need to manually shut it down:
-.Dl "poudriere jail -k -j JAILNAME"
+Leaves everything mounted, but user must chroot to and cleanup to
+and cleanup the jail manually.
 .It Fl j Ar name
 Runs only inside the jail named
 .Ar name .
@@ -687,8 +680,7 @@ Any of the following are allowed and will all be used in the order shown:
 .Sh COMPATIBILITY
 The
 .Nm
-command must be used on a DragonFly 3.3 or later that is equipped with
-HAMMER filesystem.
+command must be used on a DragonFly 3.6 or later.
 .Sh BUGS
 In case of bugs, feel free to fill
 .Pp
@@ -696,4 +688,4 @@ In case of bugs, feel free to fill
 .Sh AUTHORS
 .An Baptiste Daroussin Aq bapt@FreeBSD.org
 .An Bryan Drewery Aq bdrewery@FreeBSD.org
-.An John Marino Aq draco@marino.st
+.An John Marino Aq marino@FreeBSD.org
