@@ -201,7 +201,6 @@ if ! build_port /usr/ports/${ORIGIN}; then
 		${log}/logs/errors/${PKGNAME}.log \
 		2> /dev/null)
 	badd ports.failed "${ORIGIN} ${PKGNAME} ${failed_phase} ${errortype}"
-	update_stats
 
 	if [ ${INTERACTIVE_MODE} -eq 0 ]; then
 		stop_build /usr/ports/${ORIGIN}
@@ -213,7 +212,6 @@ else
 		save_wrkdir ${MASTERMNT} "${PKGNAME}" "/usr/ports/${ORIGIN}" \
 		    "noneed" || :
 	fi
-	update_stats
 	build_result=1
 	run_hook testport_test_success ORIGIN=${ORIGIN}
 fi
