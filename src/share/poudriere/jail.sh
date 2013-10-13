@@ -61,7 +61,7 @@ list_jail() {
 	local format
 	local j name version arch method mnt mntx hack
 
-	format='%-20s %-8s %-17s %-7s %-7s %s\n'
+	format='%-20s %-13s %-17s %-7s %-7s %s\n'
 	[ ${QUIET} -eq 0 ] &&
 		printf "${format}" "JAILNAME" "VERSION" "LAST-UPDATED" "ARCH" "METHOD" "PATH"
 	[ -d ${POUDRIERED}/jails ] || return 0
