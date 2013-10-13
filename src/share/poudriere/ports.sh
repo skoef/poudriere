@@ -208,7 +208,7 @@ if [ ${UPDATE} -eq 1 ]; then
 	case ${METHOD} in
 	rsync)
 		msg "Updating the ports tree via rsync"
-		cpdup -VV -i10 ${QOP} ${DPORTS_RSYNC_LOC}/ ${PTMNT}/
+		cpdup -VV -i0 ${QOP} ${DPORTS_RSYNC_LOC}/ ${PTMNT}/
 		bhack=$(date "+%Y-%m-%d/%H:%M")
 		pset ${PTNAME} timestamp ${bhack}
 		;;
