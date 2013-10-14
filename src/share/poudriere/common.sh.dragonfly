@@ -62,7 +62,10 @@ jail_start() {
 	done
 
 	mkdir -p ${MASTERMNT}
-	mount_tmpfs -s 400M tmpfs ${MASTERMNT}
+	# Don't limit MASTERMNT.
+	# The testport builds there, so it needs to be unlimited
+	# Additionally, the dependency check for bulk all needs a lot of space
+	mount_tmpfs tmpfs ${MASTERMNT}
 
 	export HOME=/root
 	export USER=root
@@ -76,7 +79,8 @@ jail_start() {
 			${MASTERMNT}/compat/linux/proc \
 			${MASTERMNT}/compat/svr4 \
 			${MASTERMNT}/distfiles \
-			${MASTERMNT}/new_packages \
+			${MASTERMNT}/new_packages/All \
+			${MASTERMNT}/new_packages/Latest \
 			${MASTERMNT}/packages \
 			${MASTERMNT}/portdistfiles \
 			${MASTERMNT}/usr/local
@@ -97,20 +101,22 @@ jail_start() {
 
 	msg "Mounting system devices for ${MASTERNAME}"
 	do_jail_mounts ${MASTERMNT} ${arch}
-	
+
 	PACKAGES=${POUDRIERE_DATA}/packages/${MASTERNAME}
-	
+
 	[ -d "${portsdir}/ports" ] && portsdir=${portsdir}/ports
 	msg "Mounting ports/packages/distfiles"
 	do_portbuild_mounts ${MASTERMNT} ${name} ${ptname} ${setname}
-	mkdir -p ${MASTERMNT}/new_packages/All
-	mkdir -p ${MASTERMNT}/new_packages/Latest
 	if [ ! -f ${MASTERMNT}/usr/ports/Mk/bsd.stage.mk ]; then
 		echo "NO_STAGE=yes" >> ${MASTERMNT}/etc/make.conf
 	fi
 	cp -a ${MASTERMNT}/etc ${MASTERMNT}/etc2
 	cp -a ${MASTERMNT}/var ${MASTERMNT}/var2
-	
+
+	# set up /usr/local for testport
+	JAILMNT=${mnt} injail /usr/sbin/mtree -q -U -f \
+	   /usr/ports/Templates/BSD.local.dist -d -e -p /usr/local >/dev/null
+
 	was_a_bulk_run && show_log_info
 
 	# The master jail is malleable so /etc/ can be modified later
@@ -296,8 +302,6 @@ create_slave() {
 	    ${NULLMOUNT} -o rdonly ${MASTERMNT} ${mnt}
 	    do_jail_mounts ${mnt} ${arch}
 	    do_portbuild_mounts ${mnt} ${jname} ${ptname} ${setname}
-	    mkdir -p ${mnt}/packages/All
-	    mkdir -p ${mnt}/packages/Latest
 	else
 	    job_msg "Jail     Renovating"
 	fi

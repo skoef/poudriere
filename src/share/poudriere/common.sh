@@ -709,7 +709,6 @@ do_portbuild_mounts() {
 
 	[ -d ${portsdir}/ports ] && portsdir=${portsdir}/ports
 
-	mkdir -p ${PACKAGES}/All
 	[ -d "${CCACHE_DIR:-/nonexistent}" ] &&
 		${NULLMOUNT} ${CCACHE_DIR} ${mnt}/root/.ccache
 	[ -n "${MFSSIZE}" ] && mdmfs -t -S -o async -s ${MFSSIZE} md ${mnt}/wrkdirs
@@ -724,6 +723,7 @@ do_portbuild_mounts() {
 	${NULLMOUNT} -o ro ${portsdir} ${mnt}/usr/ports ||
 		err 1 "Failed to mount the ports directory "
 	mount_packages
+	mkdir -p ${PACKAGES}/All ${PACKAGES}/Latest
 	${NULLMOUNT} ${DISTFILES_CACHE} ${mnt}/distfiles ||
 		err 1 "Failed to mount the distfiles cache directory"
 
