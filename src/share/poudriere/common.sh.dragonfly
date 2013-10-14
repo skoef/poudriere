@@ -69,6 +69,7 @@ jail_start() {
 
 	export HOME=/root
 	export USER=root
+	export TERM=cons25
 	[ -z "${NO_FORCE_PACKAGE}" ] && export FORCE_PACKAGE=yes
 	[ -z "${NO_PACKAGE_BUILDING}" ] && export PACKAGE_BUILDING=yes
 	[ ${SET_STATUS_ON_START-1} -eq 1 ] && export STATUS=1

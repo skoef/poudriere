@@ -60,6 +60,7 @@ NOPREFIX=0
 SETNAME=""
 SKIPSANITY=0
 INTERACTIVE_MODE=0
+SAVED_TERM=cons25
 PTNAME="default"
 
 while getopts "o:cnj:J:iIp:svz:" FLAG; do
