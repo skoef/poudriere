@@ -144,6 +144,24 @@ cleanup_new_ports() {
 	rm -rf ${POUDRIERED}/ports/${PTNAME} || :
 }
 
+generate_makefiles() {
+	msg "Generating ports top level and category makefiles."
+	local CATEGORIES ALLPORTS CAT LVL2
+	
+	CATEGORIES=$(cd ${PTMNT} && find -s * -type d -depth 0 -maxdepth 0 \
+		-not \( -name Mk -o -name Tools -o -name Templates \))
+	rm -f ${PTMNT}/Makefile
+	for CAT in ${CATEGORIES}; do
+		echo "SUBDIR += ${CAT}" >> ${PTMNT}/Makefile
+		rm -f ${PTMNT}/${CAT}/Makefile
+		ALLPORTS=$(cd ${PTMNT}/${CAT} && find -s * -type d -depth 0 \
+			-maxdepth 0)
+		for LVL2 in ${ALLPORTS}; do
+			echo "SUBDIR += ${LVL2}" >> ${PTMNT}/${CAT}/Makefile
+		done
+	done
+}
+
 if [ ${CREATE} -eq 1 ]; then
 	# test if it already exists
 	porttree_exists ${PTNAME} && err 2 "The ports tree, ${PTNAME}, already exists"
@@ -178,6 +196,7 @@ if [ ${CREATE} -eq 1 ]; then
 		pset ${PTNAME} method "-"
 	fi
 
+	generate_makefiles
 	unset CLEANUP_HOOK
 fi
 
@@ -223,5 +242,6 @@ if [ ${UPDATE} -eq 1 ]; then
 		;;
 	esac
 
+	generate_makefiles
 	date +%s > ${PORTSMNT:-${PTMNT}}/.poudriere.stamp
 fi
