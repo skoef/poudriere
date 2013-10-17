@@ -2738,7 +2738,7 @@ fi
 
 [ -n "${MFSSIZE}" -a -n "${USE_TMPFS}" ] && err 1 "You can't use both tmpfs and mdmfs"
 
-if [ ${BSDPLATFORM} = "FreeBSD" ]; then
+if [ ${BSDPLATFORM} = "freebsd" ]; then
 for val in ${USE_TMPFS}; do
 	case ${val} in
 	wrkdir|yes) TMPFS_WRKDIR=1 ;;
@@ -2765,7 +2765,7 @@ case "${WRKDIR_ARCHIVE_FORMAT}" in
 	*) err 1 "invalid format for WRKDIR_ARCHIVE_FORMAT: ${WRKDIR_ARCHIVE_FORMAT}" ;;
 esac
 
-if [ ${BSDPLATFORM} = "FreeBSD" ]; then
+if [ ${BSDPLATFORM} = "freebsd" ]; then
 #Converting portstree if any
 if [ ! -d ${POUDRIERED}/ports ]; then
 	mkdir -p ${POUDRIERED}/ports
