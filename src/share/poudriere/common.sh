@@ -2574,11 +2574,12 @@ prepare_ports() {
 		xargs -J % mv % "${MASTERMNT}/poudriere/pool/unbalanced"
 	balance_pool
 
+	# This modifies the slave make.conf only, not reference jail
 	[ -z "${ALLOW_MAKE_JOBS}" ] && echo "DISABLE_MAKE_JOBS=poudriere" \
-	    >> ${MASTERMNT}/etc/make.conf
+	    >> ${MASTERMNT}/etc2/make.conf
 
 	[ -n "${JOBS_LIMIT}" ] && echo "MAKE_JOBS_NUMBER=${JOBS_LIMIT}" \
-		>> ${MASTERMNT}/etc/make.conf
+		>> ${MASTERMNT}/etc2/make.conf
 
 	markfs prepkg ${MASTERMNT}
 }
