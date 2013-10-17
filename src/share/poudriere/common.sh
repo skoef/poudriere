@@ -117,7 +117,12 @@ eargs() {
 
 run_hook() {
 	local hookfile=${HOOKDIR}/${1}.sh
+	local arguments
 	shift
+
+	for arg in $@; do
+		arguments="${arguments} ${arg#*=}"
+	done
 
 	[ -f ${hookfile} ] &&
 		env $@ \
@@ -132,7 +137,7 @@ run_hook() {
 		SETNAME="${SETNAME}" \
 		PACKAGES="${PACKAGES}" \
 		PACKAGES_ROOT="${PACKAGES_ROOT}" \
-		/bin/sh ${hookfile}
+		/bin/sh ${hookfile} ${arguments}
 	return 0
 }
 
