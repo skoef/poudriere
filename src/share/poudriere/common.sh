@@ -49,7 +49,7 @@ _wait() {
 not_for_os() {
 	local os=$1
 	shift
-	[ "${os}" = "${BSDPLATFORM}" ] && err 1 "This is no supported on ${BSDPLATFORM}: $@"
+	[ "${os}" = "${BSDPLATFORM}" ] && err 1 "This is not supported on ${BSDPLATFORM}: $@"
 }
 
 err() {
@@ -2580,8 +2580,6 @@ prepare_ports() {
 
 	[ -n "${JOBS_LIMIT}" ] && echo "MAKE_JOBS_NUMBER=${JOBS_LIMIT}" \
 		>> ${MASTERMNT}/etc2/make.conf
-
-	markfs prepkg ${MASTERMNT}
 }
 
 balance_pool() {

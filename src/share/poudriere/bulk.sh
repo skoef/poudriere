@@ -173,6 +173,8 @@ prepare_ports
 
 run_hook bulk_started PORTS_QUEUED=$(bget stats_queued)
 
+markfs prepkg ${MASTERMNT}
+
 bset status "building:"
 
 parallel_build ${JAILNAME} ${PTNAME} ${SETNAME}
