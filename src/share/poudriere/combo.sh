@@ -31,6 +31,7 @@ usage() {
 
 Parameters:
     -C          -- Cleanup jail mounts (contingency cleanup)
+    -d          -- Perform dependency check on entire port tree
     -i          -- Show jail information
     -x          -- List all failed ports in last or ongoing build
 
@@ -43,6 +44,7 @@ Options:
 INFO=0
 LISTFAIL=0
 DISMOUNT=0
+DEPCHECK=0
 
 SCRIPTPATH=`realpath $0`
 SCRIPTPREFIX=`dirname ${SCRIPTPATH}`
@@ -52,7 +54,7 @@ PTNAME="default"
 
 [ $# -eq 0 ] && usage
 
-while getopts "j:p:Cix" FLAG; do
+while getopts "j:p:Cdix" FLAG; do
 	case "${FLAG}" in
 		C)
 			DISMOUNT=1
@@ -62,6 +64,9 @@ while getopts "j:p:Cix" FLAG; do
 			;;
 		p)
 			PTNAME=${OPTARG}
+			;;
+		d)
+			DEPCHECK=1
 			;;
 		i)
 			INFO=1
@@ -78,6 +83,7 @@ done
 
 [ -z "${JAILNAME}" ] && err 1 "Don't know on which jail to run please specify -j"
 
+SETNAME=""
 MASTERNAME=${JAILNAME}-${PTNAME}${SETNAME:+-${SETNAME}}
 MASTERMNT=${POUDRIERE_DATA}/build/${MASTERNAME}/ref
 BUILDNAME=latest
@@ -154,18 +160,30 @@ list_failures() {
 	fi
 }
 
-case "${INFO}${DISMOUNT}${LISTFAIL}" in
-	100)
+solo_dep_check() {
+	ALL=1
+	SKIPSANITY=1
+	jail_start ${JAILNAME} ${PTNAME} ${SETNAME}
+	prepare_ports
+	cleanup
+}
+
+case "${INFO}${DISMOUNT}${LISTFAIL}${DEPCHECK}" in
+	1000)
 		test -z ${JAILNAME} && usage
 		info_jail
 		;;
-	010)
+	0100)
 		test -z ${JAILNAME} && usage
 		jail_dismount
 		;;
-	001)
+	0010)
 		test -z ${JAILNAME} && usage
 		list_failures
+		;;
+	0001)
+		test -z ${JAILNAME} && usage
+		solo_dep_check
 		;;
 	*)
 		usage
