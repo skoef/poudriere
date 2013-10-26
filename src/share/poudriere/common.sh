@@ -733,8 +733,8 @@ do_portbuild_mounts() {
 
 	${NULLMOUNT} -o ro ${portsdir} ${mnt}/usr/ports ||
 		err 1 "Failed to mount the ports directory "
-	mount_packages
 	mkdir -p ${PACKAGES}/All ${PACKAGES}/Latest
+	mount_packages
 	${NULLMOUNT} ${DISTFILES_CACHE} ${mnt}/distfiles ||
 		err 1 "Failed to mount the distfiles cache directory"
 
