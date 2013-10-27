@@ -38,9 +38,24 @@ function update_fields() {
 
 function format_origin(origin) {
 	var data = origin.split("/");
+	var port = (typeof data[1] == "undefined") ? "&nbsp;" : data[1];
 	return "<a title=\"portsmon for " + origin +
 		"\" href=\"http://portsmon.freebsd.org/portoverview.py?category=" +
-		data[0] + "&amp;portname=" + data[1] + "\">"+ origin + "</a></td>";
+		data[0] + "&amp;portname=" + port + "\">" + origin + "</a>";
+}
+
+function format_origin2(origin) {
+	var data = origin.split("/");
+	var port = (typeof data[1] == "undefined") ? "&nbsp;" : data[1];
+	return "<a title=\"portsmon for " + origin +
+		"\" href=\"http://portsmon.freebsd.org/portoverview.py?category=" +
+		data[0] + "&amp;portname=" + port + "\">"+ port +
+		"</a><br/>" + data[0];
+}
+
+function format_builder_status (status, buildtime) {
+	var hack = buildtime == "" ? "&nbsp;" : buildtime;
+	return status + '<br/><span class="timehack">' + hack + "</span>";
 }
 
 function format_pkgname(pkgname) {
@@ -148,13 +163,18 @@ function process_data(data) {
 	table_rows = [];
 	for (n = 0; n < data.status.length; n++) {
 		var builder = data.status[n];
-		table_row = [];
-		table_row.push(builder.id);
 
 		a = builder.status.split(":");
-		table_row.push(format_origin(a[1]));
-		table_row.push(a[0]);
-		table_rows.push(table_row);
+		if (builder.id != "main") {
+			table_row = [];
+			table_row.push(builder.id);
+			table_row.push(format_origin2(a[1]));
+			table_row.push(format_builder_status(a[0], ""));
+			table_rows.push(table_row);
+		}
+		else {
+			$('#builder_status').html(a[0]);
+		}
 	}
 	// XXX This could be improved by updating cells in-place
 	$('#builders_table').dataTable().fnClearTable();
@@ -218,6 +238,7 @@ $(document).ready(function() {
 		"bFilter": false,
 		"bInfo": false,
 		"bPaginate": false,
+		"aoColumnDefs": [{"bSortable": false, "aTargets": [0,1,2]}],
 	});
 
 	columnDefs = {
