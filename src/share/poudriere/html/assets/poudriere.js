@@ -31,7 +31,7 @@ function update_fields() {
 		},
 		error: function(data) {
 			/* May not be there yet, try again shortly */
-			setTimeout(update_fields, 2 * 1000);
+			setTimeout(update_fields, 5 * 1000);
 		}
 	});
 }
@@ -54,7 +54,7 @@ function format_origin2(origin) {
 }
 
 function format_builder_status (status, buildtime) {
-	var hack = buildtime == "" ? "&nbsp;" : buildtime;
+	var hack = buildtime == "" ? "&nbsp;" : buildtime.split("_").join(":");
 	return status + '<br/><span class="timehack">' + hack + "</span>";
 }
 
@@ -134,7 +134,7 @@ function format_setname(setname) {
 }
 
 function process_data(data) {
-	var html, a, n;
+	var html, a, btime, n;
 	var table_rows, table_row;
 
 	// Redirect from /latest/ to the actual build.
@@ -166,10 +166,11 @@ function process_data(data) {
 
 		a = builder.status.split(":");
 		if (builder.id != "main") {
+			btime = (typeof a[2] == "undefined") ? "" : a[2];
 			table_row = [];
 			table_row.push(builder.id);
 			table_row.push(format_origin2(a[1]));
-			table_row.push(format_builder_status(a[0], ""));
+			table_row.push(format_builder_status(a[0], btime));
 			table_rows.push(table_row);
 		}
 		else {

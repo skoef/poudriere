@@ -379,7 +379,7 @@ siginfo_handler() {
 	local queue_width=2
 	local now
 	local j
-	local pkgname origin phase buildtime
+	local pkgname origin phase buildtime tmporigin
 	local format_origin_phase format_phase
 	local copystatus=${status}
 
@@ -411,9 +411,10 @@ siginfo_handler() {
 			# Skip builders not started yet
 			[ -z "${status}" ] && continue
 			# Hide idle workers
-			[ "${status}" = "idle:" ] && continue
-			origin=${status#*:}
-			phase="${status%:*}"
+			[ "${status}" = "idle::" ] && continue
+			tmporigin=${status#*:}
+			origin=${tmporigin%:*}
+			phase="${status%%:*}"
 			if [ -n "${origin}" -a "${origin}" != "${status}" ]; then
 				pkgname=$(cache_get_pkgname ${origin})
 				# Find the buildtime for this pkgname
@@ -876,14 +877,15 @@ check_leftovers() {
 }
 
 check_fs_violation() {
-	[ $# -eq 6 ] || eargs mnt mtree_target port status_msg err_msg \
-	    status_value
+	[ $# -eq 7 ] || eargs mnt mtree_target port status_msg err_msg \
+	    status_value mod_stamp
 	local mnt="$1"
 	local mtree_target="$2"
 	local port="$3"
 	local status_msg="$4"
 	local err_msg="$5"
 	local status_value="$6"
+	local mod_stamp="$7"
 	local tmpfile=${mnt}/tmp/check_fs_violation
 	local ret=0
 
@@ -896,7 +898,7 @@ check_fs_violation() {
 	if [ -s ${tmpfile} ]; then
 		msg "Error: ${err_msg}"
 		cat ${tmpfile}
-		bset ${MY_JOBID} status "${status_value}:${port}"
+		bset ${MY_JOBID} status "${status_value}:${port}:${mod_stamp}"
 		job_msg_verbose "Status   ${port}: ${status_value}"
 		ret=1
 	fi
@@ -1013,6 +1015,7 @@ _real_build_port() {
 	local hangstatus
 	local pkgenv
 	local no_stage=$(injail make -C ${portdir} -VNO_STAGE)
+	local modstamp=$(stat -f "%m" ${MASTERMNT}/poudriere/building/${PKGNAME})
 	local targets install_order build_fs_violation_check_target
 	local stagedir plistsub_sed
 	local jailuser
@@ -1045,7 +1048,7 @@ _real_build_port() {
 	[ -z "${PORTTESTING}" ] && PORT_FLAGS="${PORT_FLAGS} NO_DEPENDS=yes"
 
 	for phase in ${targets}; do
-		bset ${MY_JOBID} status "${phase}:${port}"
+		bset ${MY_JOBID} status "${phase}:${port}:${modstamp}"
 		job_msg_verbose "Status   ${port}: ${phase}"
 		case ${phase} in
 		fetch)
@@ -1060,7 +1063,7 @@ _real_build_port() {
 				check_fs_violation ${mnt} prebuild "${port}" \
 				    "Checking for filesystem violations" \
 				    "Filesystem touched during build:" \
-				    "build_fs_violation" ||
+				    "build_fs_violation" ${modstamp} ||
 				    return 1
 			fi
 			;;
@@ -1074,7 +1077,8 @@ _real_build_port() {
 				check_fs_violation ${mnt} prestage "${port}" \
 				    "Checking for staging violations" \
 				    "Filesystem touched during stage (files must install to \${STAGEDIR}):" \
-				    "stage_fs_violation" || return 1
+				    "stage_fs_violation" ${modstamp} || 
+				    return 1
 			fi
 			;;
 		deinstall)
@@ -1101,7 +1105,7 @@ _real_build_port() {
 			PREFIX=$(injail env ${PORT_FLAGS} make -C ${portdir} -VPREFIX)
 			if [ -z "${no_stage}" ]; then
 				msg "Checking for orphaned files and directories in stage directory (missing from plist)"
-				bset ${MY_JOBID} status "stage_orphans:${port}"
+				bset ${MY_JOBID} status "stage_orphans:${port}:${modstamp}"
 				local orphans=$(mktemp ${mnt}/tmp/orphans.XXXXXX)
 				local die=0
 
@@ -1150,7 +1154,7 @@ Try testport with -n to use PREFIX=LOCALBASE"
 				[ $die -eq 0 ] || return 1
 
 				msg "Checking for absolute symlinks into staging directory"
-				bset ${MY_JOBID} status "stage_symlinks:${port}"
+				bset ${MY_JOBID} status "stage_symlinks:${port}:${modstamp}"
 				if [ ${PKGNG} -eq 1 ]; then
 					injail ${PKG_BIN} query %Fp ${PKGNAME}
 				else
@@ -1193,11 +1197,11 @@ Try testport with -n to use PREFIX=LOCALBASE"
 				# 3 = cmd timeout
 				if [ $hangstatus -eq 2 ]; then
 					msg "Killing runaway build after ${NOHANG_TIME} seconds with no output"
-					bset ${MY_JOBID} status "${phase}/runaway:${port}"
+					bset ${MY_JOBID} status "${phase}/runaway:${port}:${modstamp}"
 					job_msg_verbose "Status   ${port}: runaway"
 				elif [ $hangstatus -eq 3 ]; then
 					msg "Killing timed out build after ${MAX_EXECUTION_TIME} seconds"
-					bset ${MY_JOBID} status "${phase}/timeout:${port}"
+					bset ${MY_JOBID} status "${phase}/timeout:${port}:${modstamp}"
 					job_msg_verbose "Status   ${port}: timeout"
 				fi
 				return 1
@@ -1218,7 +1222,7 @@ Try testport with -n to use PREFIX=LOCALBASE"
 
 		if [ "${phase}" = "deinstall" ]; then
 			msg "Checking for extra files and directories"
-			bset ${MY_JOBID} status "leftovers:${port}"
+			bset ${MY_JOBID} status "leftovers:${port}:${modstamp}"
 			local add=$(mktemp ${mnt}/tmp/add.XXXXXX)
 			local add1=$(mktemp ${mnt}/tmp/add1.XXXXXX)
 			local del=$(mktemp ${mnt}/tmp/del.XXXXXX)
@@ -1337,7 +1341,7 @@ Try testport with -n to use PREFIX=LOCALBASE"
 			-exec mv {} {mnt}/packages/Latest \;
 	fi
 
-	bset ${MY_JOBID} status "idle:"
+	bset ${MY_JOBID} status "idle::"
 	return 0
 }
 
@@ -1462,7 +1466,7 @@ build_queue() {
 				read pkgname < ${MASTERMNT}/poudriere/var/run/${j}.pkgname
 				rm -f ${MASTERMNT}/poudriere/var/run/${j}.pid \
 					${MASTERMNT}/poudriere/var/run/${j}.pkgname
-				bset ${j} status "idle:"
+				bset ${j} status "idle::"
 				mark_done ${pkgname}
 			fi
 
@@ -1519,7 +1523,7 @@ start_html_json() {
 json_main() {
 	while :; do
 		build_json
-		sleep 2
+		sleep 5
 	done
 }
 
@@ -1529,7 +1533,7 @@ build_json() {
 	local awklist="${pf}.ports.* ${pf}.stat* ${pf}.setname \
 		${pf}.ptname ${pf}.jailname ${pf}.mastername \
 		${pf}.builders ${pf}.buildname"
-	awk \
+	awk -v now=$(date +%s) \
 		-f ${AWKPREFIX}/json.awk ${awklist} | \
 		awk 'ORS=""; {print}' | \
 		sed  -e 's/,\([]}]\)/\1/g' \
@@ -1654,6 +1658,7 @@ build_pkg() {
 	local log=$(log_path)
 	local ignore
 	local errortype
+	local modstamp=$(stat -f "%m" ${MASTERMNT}/poudriere/building/${pkgname})
 
 	trap '' SIGTSTP
 
@@ -1662,7 +1667,7 @@ build_pkg() {
 	portdir="/usr/ports/${port}"
 
 	job_msg "Starting build of ${port}"
-	bset ${MY_JOBID} status "starting:${port}"
+	bset ${MY_JOBID} status "starting:${port}:${modstamp}"
 	create_slave ${MY_JOBID}
 
 	if [ ${TMPFS_LOCALBASE} -eq 1 -o ${TMPFS_ALL} -eq 1 ]; then
@@ -1703,7 +1708,7 @@ build_pkg() {
 		if ! build_port ${portdir}; then
 			build_failed=1
 			failed_status=$(bget ${MY_JOBID} status)
-			failed_phase=${failed_status%:*}
+			failed_phase=${failed_status%%:*}
 
 			save_wrkdir ${mnt} "${port}" "${portdir}" "${failed_phase}" || :
 		elif [ -f ${mnt}/${portdir}/.keep ]; then
@@ -1740,7 +1745,7 @@ build_pkg() {
 
 	clean_pool ${PKGNAME} ${clean_rdepends}
 
-	bset ${MY_JOBID} status "done:${port}"
+	bset ${MY_JOBID} status "done:${port}:${modstamp}"
 
 	stop_build ${portdir}
 	destroy_slave ${MY_JOBID}
@@ -2594,7 +2599,7 @@ balance_pool() {
 	mkdir ${lock} 2>/dev/null || return 0
 
 	if [ -n "${MY_JOBID}" ]; then
-		bset ${MY_JOBID} status "balancing_pool:"
+		bset ${MY_JOBID} status "balancing_pool::"
 	else
 		bset status "balancing_pool:"
 	fi

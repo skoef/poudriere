@@ -40,6 +40,16 @@ function display_skipped() {
   print "}\n"
 }
 
+# Format elapsed build time or return blank
+function duration(modstamp) {
+  if (modstamp == "") return ""
+  seconds = now - modstamp
+  hours = int(seconds / 3600)
+  minutes = int((seconds - (hours * 3600)) / 60)
+  seconds = seconds % 60;
+  return sprintf("%02d_%02d_%02d", hours, minutes, seconds)
+}
+
 function end_type() {
   if (in_type) {
     # Close out ports
@@ -140,9 +150,11 @@ BEGIN {
     # Group each port list into arrays
     ports[group_id, count] = $0
   } else if (type == "status") {
+    split($0, stp, ":")
+    stp3 = duration(stp[3])
     print "{"
     print "\"id\":\"" group_id "\","
-    print "\"status\":\"" $0 "\""
+    print "\"status\":\"" stp[1] ":" stp[2] ":" stp3 "\""
     print "},"
   } else {
     if (group_id)
