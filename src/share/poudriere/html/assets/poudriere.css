@@ -1,4 +1,13 @@
 /* vim: set sts=4 sw=4 ts=4 noet: */
+body {
+        font-family: Arial, Helvetica, sans-serif;
+        font-size: 9pt;
+}
+
+a {
+        text-decoration: none;
+}
+
 #loading_overlay {
 	background: #FFF;
 	width: 100%;
@@ -18,7 +27,8 @@
 table {
 	border-collapse: collapse;
 	border: 2px solid black;
-	margin-top:	5px;
+	margin-top: 5px;
+	font-size: 9pt;
 }
 th, td { border: 1px solid black; }
 
@@ -27,14 +37,22 @@ th, td { border: 1px solid black; }
 .layout td {
 	border: 0;
 }
-.built { background-color: #00CC00; }
-.built .row1 { background-color: #00FF00; }
-.failed { background-color: #E00000; }
-.failed .row1 { background-color: #FF0000; }
-.skipped { background-color: #CC6633; }
-.skipped .row1 { background-color: #AA6734; }
-.ignored { background-color: #FF9900; }
-.ignored .row1 { background-color: #FF6F00; }
+.built {
+        background-color: #339966;
+        color: #CCFFCC;
+}
+.failed {
+        background-color: #CC0033;
+        color: #FFFF99;
+}
+.skipped {
+        background-color: #CC6633;
+        color: #F0F0F0;
+}
+.ignored {
+        background-color: #FFCC33;
+        color: #202020;
+}
 .remaining { background-color: #E3E3E3; }
 .new { display: none; }
 #header {
@@ -114,6 +132,9 @@ th, td { border: 1px solid black; }
 	border: 0;
 	margin-bottom: 1px;
 }
+#stats td {
+	width: 16.66%;
+}
 #progress {
 	right: 0;
 	position: absolute;
@@ -128,12 +149,61 @@ th, td { border: 1px solid black; }
 	text-align: left;
 }
 
+#built_table td:nth-child(2) {
+        width: 45%;
+}
+
+#built_table td:nth-child(3) {
+        width: 10%;
+}
+
+#failed_table td:nth-child(2) {
+        width: 32%;
+}
+
+#failed_table td:nth-child(3) {
+        width: 16%;
+}
+
+#failed_table td:nth-child(4) {
+        width: 10%;
+}
+
+#failed_table td:nth-child(5) {
+        width: 10%;
+}
+
+#skipped_table td:nth-child(1) {
+        width: 32%;
+}
+
+#skipped_table td:nth-child(2) {
+        width: 32%;
+}
+
+#ignored_table td:nth-child(1) {
+        width: 22%;
+}
+
+#ignored_table td:nth-child(2) {
+        width: 22%;
+}
+
+#ignored_table td:nth-child(3) {
+        width: 10%;
+}
+
+#ignored {
+        margin-bottom: 200px;
+}
+
 h1 {
 	font-size: 16pt;
 	text-align: center;
 }
 h2 {
 	background-color: #eee;
+	padding: 2px 5px;
 }
 .status {
 	padding-bottom: 20px;

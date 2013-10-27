@@ -71,9 +71,9 @@ function update_canvas(stats) {
 	context.strokeStyle = 'black';
 	context.stroke();
 	var x = 0;
-	x += minidraw(x, context, "#00CC00", queued, built);
-	x += minidraw(x, context, "#E00000", queued, failed);
-	x += minidraw(x, context, "#FF9900", queued, ignored);
+	x += minidraw(x, context, "#339966", queued, built);
+	x += minidraw(x, context, "#CC0033", queued, failed);
+	x += minidraw(x, context, "#FFCC33", queued, ignored);
 	x += minidraw(x, context, "#CC6633", queued, skipped);
 
 	$('#stats_remaining').html(remaining);
@@ -163,12 +163,7 @@ function process_data(data) {
 	/* Stats */
 	if (data.stats) {
 		$.each(data.stats, function(status, count) {
-			if (status == "queued") {
-				html = count;
-			} else {
-				html = '<a href="#' + status + '">' + count + '</a>';
-			}
-
+			html = count;
 			$('#stats_' + status).html(html);
 		});
 	}

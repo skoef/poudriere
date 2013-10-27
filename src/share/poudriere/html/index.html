@@ -56,17 +56,17 @@
 											<th>Total</th>
 											<th>Built</th>
 											<th>Failed</th>
-											<th>Skipped</th>
 											<th>Ignored</th>
-											<th>To build</th>
+											<th>Skipped</th>
+											<th>Remaining</th>
 										</tr>
 									</thead>
 									<tr>
 										<td id="stats_queued" class="queued"></td>
 										<td id="stats_built" class="built"></td>
 										<td id="stats_failed" class="failed"></td>
-										<td id="stats_skipped" class="skipped"></td>
 										<td id="stats_ignored" class="ignored"></td>
+										<td id="stats_skipped" class="skipped"></td>
 										<td id="stats_remaining" class="remaining"></td>
 									</tr>
 								</table>
@@ -96,8 +96,8 @@
 			<div id="right">
 				<div id="built" class="anchor status">
 					<h2>Built ports</h2>
-					<table class="built" id="built_table">
-						<thead>
+					<table id="built_table">
+						<thead class="built">
 							<tr>
 								<th>Package</th>
 								<th>Origin</th>
@@ -109,8 +109,8 @@
 				</div>
 				<div id="failed" class="anchor status">
 					<h2>Failed ports</h2>
-					<table class="failed" id="failed_table">
-						<thead>
+					<table id="failed_table">
+						<thead class="failed">
 							<tr>
 								<th>Package</th>
 								<th>Origin</th>
@@ -124,8 +124,8 @@
 				</div>
 				<div id="skipped" class="anchor status">
 					<h2>Skipped ports</h2>
-					<table class="skipped" id="skipped_table">
-						<thead>
+					<table id="skipped_table">
+						<thead class="skipped">
 							<tr>
 								<th>Package</th>
 								<th>Origin</th>
@@ -137,8 +137,8 @@
 				</div>
 				<div id="ignored" class="anchor status">
 					<h2>Ignored ports</h2>
-					<table class="ignored" id="ignored_table">
-						<thead>
+					<table id="ignored_table">
+						<thead class="ignored">
 							<tr>
 								<th>Package</th>
 								<th>Origin</th>
