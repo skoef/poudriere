@@ -1063,7 +1063,7 @@ _real_build_port() {
 				check_fs_violation ${mnt} prebuild "${port}" \
 				    "Checking for filesystem violations" \
 				    "Filesystem touched during build:" \
-				    "build_fs_violation" ${modstamp} ||
+				    "build_fs_violation" "${modstamp}" ||
 				    return 1
 			fi
 			;;
@@ -1077,7 +1077,7 @@ _real_build_port() {
 				check_fs_violation ${mnt} prestage "${port}" \
 				    "Checking for staging violations" \
 				    "Filesystem touched during stage (files must install to \${STAGEDIR}):" \
-				    "stage_fs_violation" ${modstamp} || 
+				    "stage_fs_violation" "${modstamp}" || 
 				    return 1
 			fi
 			;;
