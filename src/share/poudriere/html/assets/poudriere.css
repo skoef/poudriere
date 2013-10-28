@@ -95,6 +95,10 @@ th, td { border: 1px solid black; }
 	border-top: 1px solid black;
 }
 
+#stats_built, #stats_failed, #stats_ignored, #stats_skipped {
+	cursor: hand;
+}
+
 /* http://nicolasgallagher.com/jump-links-and-viewport-positioning/demo */
 .anchor {
 	border-top: 95px solid transparent;

@@ -133,6 +133,10 @@ function format_setname(setname) {
 	return setname ? ('-' + setname) : '';
 }
 
+function jump(myanchor) {
+	$(document).scrollTop( $('#' + myanchor).offset().top );
+}
+
 function process_data(data) {
 	var html, a, btime, n;
 	var table_rows, table_row;
