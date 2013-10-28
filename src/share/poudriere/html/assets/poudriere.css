@@ -131,6 +131,7 @@ th, td { border: 1px solid black; }
 }
 #nav a {
 	margin: 0px 8px;
+	cursor: hand;
 }
 #logo {
 	float: left;
