@@ -122,6 +122,11 @@ th, td { border: 1px solid black; }
 }
 #nav {
 	float: left;
+	margin-left: 5px;
+	margin-top: 4px;
+}
+#nav a {
+	margin: 0px 8px;
 }
 #logo {
 	float: left;
