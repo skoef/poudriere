@@ -31,7 +31,7 @@ function update_fields() {
 		},
 		error: function(data) {
 			/* May not be there yet, try again shortly */
-			setTimeout(update_fields, 5 * 1000);
+			setTimeout(update_fields, 4 * 1000);
 		}
 	});
 }
@@ -138,7 +138,7 @@ function jump(myanchor) {
 }
 
 function process_data(data) {
-	var html, a, btime, n;
+	var html, a, btime, master_status, n;
 	var table_rows, table_row;
 
 	// Redirect from /latest/ to the actual build.
@@ -178,7 +178,8 @@ function process_data(data) {
 			table_rows.push(table_row);
 		}
 		else {
-			$('#builder_status').html(a[0]);
+			master_status = a[0];
+			$('#builder_status').html(master_status);
 		}
 	}
 	// XXX This could be improved by updating cells in-place
@@ -231,7 +232,12 @@ function process_data(data) {
 	}
 
 	first_run = false;
-	setTimeout(update_fields, updateInterval * 1000);
+	if (master_status == "stop") {
+		// No further changes are coming, stop polling
+		clearInterval(update_fields);
+	} else {
+		setTimeout(update_fields, updateInterval * 1000);
+	}
 }
 
 $(document).ready(function() {
