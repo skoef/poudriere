@@ -142,7 +142,7 @@ th, td { border: 1px solid black; }
 	width: 16.66%;
 }
 #progress {
-	right: 0;
+	left: 566px;
 	position: absolute;
 }
 #build_info {
