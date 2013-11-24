@@ -7,18 +7,32 @@ $.ajaxSetup({
 	cache: false
 });
 
-function minidraw(x, context, color, queued, variable) {
-	var pct = variable * 100 / queued;
-	if (pct > 98.0 && pct < 100.0) {
-		pct = 98;
-	} else {
-		pct = Math.ceil(pct);
-	}
-	var newx = pct * 5;
-	context.fillStyle = color;
-	context.fillRect(x + 1, 1, newx, 20);
+function catwidth (variable, queued) {
+        if (!variable)
+		return 0;
+	var width = variable * 500 / queued;
+	return (width < 1) ? 1 : Math.round (width);
+}
 
-	return (newx);
+function maxcatwidth(A, B, C, D, queued) {
+	var cat = new Array();
+	cat[0] = catwidth (A, queued);
+	cat[1] = catwidth (B, queued);
+	cat[2] = catwidth (C, queued);
+	cat[3] = catwidth (D, queued);
+	cat.sort();
+	return (500 - cat[0] - cat[1] - cat[2]);
+}
+
+function minidraw(x, context, color, queued, variable, mcw) {
+	var width = catwidth (variable, queued);
+	if (width == 0)
+		return (0);
+	if (width > mcw)
+		width = mcw;
+	context.fillStyle = color;
+	context.fillRect(x,  1, width, 20);
+	return (width);
 }
 
 
@@ -78,18 +92,15 @@ function update_canvas(stats) {
 
 	var context = canvas.getContext('2d');
 
-	context.beginPath();
-	context.rect(0, 0, 502, 22);
+	context.rect(0, 0, 500, 22);
 	context.fillStyle = '#E3E3E3';
-	context.fillRect(1, 1, 500, 20);
-	context.lineWidth = 1;
-	context.strokeStyle = 'black';
-	context.stroke();
+	context.fillRect(0, 1, 500, 20);
 	var x = 0;
-	x += minidraw(x, context, "#339966", queued, built);
-	x += minidraw(x, context, "#CC0033", queued, failed);
-	x += minidraw(x, context, "#FFCC33", queued, ignored);
-	x += minidraw(x, context, "#CC6633", queued, skipped);
+	var mcw = maxcatwidth (built, failed, ignored, skipped, queued);
+	x += minidraw(x, context, "#339966", queued, built, mcw);
+	x += minidraw(x, context, "#CC0033", queued, failed, mcw);
+	x += minidraw(x, context, "#FFCC33", queued, ignored, mcw);
+	x += minidraw(x, context, "#CC6633", queued, skipped, mcw);
 
 	$('#stats_remaining').html(remaining);
 }
