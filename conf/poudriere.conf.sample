@@ -142,3 +142,29 @@ DPORTS_URL=git://github.com/jrmarino/DPorts.git
 # This defines the time (in seconds) before a command is considered to
 # be in a runaway state for having no output on stdout. Default: 7200
 #NOHANG_TIME=7200
+
+
+# The repository is updated atomically if set yes. This involves using
+# hardlinks and symlinks. The operations are fast, but can be intrusive
+# for remote syncing or backups.
+# Recommended to always keep on.
+# Default: yes
+#ATOMIC_PACKAGE_REPOSITORY=yes
+
+# When using ATOMIC_PACKAGE_REPOSITORY, commit the packages if some
+# packages fail to build. Ignored ports are considered successful.
+# This can be set to 'no' to only commit the packages once no failures
+# are encountered.
+# Default: yes
+#COMMIT_PACKAGES_ON_FAILURE=yes
+
+# Keep older package repositories. This can be used to rollback a system
+# or to bisect issues by changing the repository to one of the older
+# versions and reinstalling everything with `pkg upgrade -f`
+# ATOMIC_PACKAGE_REPOSITORY is required for this.
+# Default: no
+#KEEP_OLD_PACKAGES=no
+
+# How many old package repositories to keep with KEEP_OLD_PACKAGES
+# Default: 5
+#KEEP_OLD_PACKAGES_COUNT=5

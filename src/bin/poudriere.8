@@ -27,7 +27,7 @@
 .\"
 .\" Note: The date here should be updated whenever a non-trivial
 .\" change is made to the manual page.
-.Dd October 11, 2013
+.Dd November 1, 2013
 .Dt POUDRIERE 8
 .Os
 .Sh NAME
@@ -158,6 +158,9 @@ Run the bulk build on the jail named
 This argument specifies how many
 .Ar number
 jobs will run in parallel for a bulk build.
+.It Fl n
+Dry run. Show what woud be done, but do not actually build or delete any
+packages.
 .It Fl N
 Build package repository when build is completed.
 .It Fl p Ar tree
@@ -363,6 +366,8 @@ This argument specifies how many
 jobs will run in parallel for building the dependencies.
 .It Fl n
 Do not use custom prefix.
+.It Fl N
+Do not build package repository or INDEX when build of dependencies is completed.
 .It Fl p Ar tree
 Specifies which ports
 .Ar tree

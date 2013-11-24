@@ -43,6 +43,8 @@ Options:
     -I          -- Advanced Interactive mode. Leaves everything mounted, but
                    user must chroot to and cleanup the jail manually.
     -n          -- No custom prefix
+    -N          -- Do not build package repository or INDEX when build
+                   of dependencies completed
     -p tree     -- Specify the path to the portstree
     -s          -- Skip sanity checks
     -v          -- Be verbose; show more information. Use twice to enable
@@ -61,8 +63,9 @@ SETNAME=""
 SKIPSANITY=0
 INTERACTIVE_MODE=0
 PTNAME="default"
+BUILD_REPO=1
 
-while getopts "o:cnj:J:iIp:svz:" FLAG; do
+while getopts "o:cnj:J:iINp:svz:" FLAG; do
 	case "${FLAG}" in
 		c)
 			CONFIGSTR=1
@@ -86,6 +89,9 @@ while getopts "o:cnj:J:iIp:svz:" FLAG; do
 		I)
 			INTERACTIVE_MODE=2
 			;;
+		N)
+			BUILD_REPO=0
+			;;
 		p)
 			porttree_exists ${OPTARG} ||
 			    err 2 "No such ports tree ${OPTARG}"
@@ -99,7 +105,7 @@ while getopts "o:cnj:J:iIp:svz:" FLAG; do
 			SETNAME="${OPTARG}"
 			;;
 		v)
-			VERBOSE=$((${VERBOSE:-0} + 1))
+			VERBOSE=$((${VERBOSE} + 1))
 			;;
 		*)
 			usage
@@ -134,8 +140,6 @@ POUDRIERE_BUILD_TYPE=bulk parallel_build ${JAILNAME} ${PTNAME} ${SETNAME}
 if [ $(bget stats_failed) -gt 0 ] || [ $(bget stats_skipped) -gt 0 ]; then
 	failed=$(bget ports.failed | awk '{print $1 ":" $3 }' | xargs echo)
 	skipped=$(bget ports.skipped | awk '{print $1}' | sort -u | xargs echo)
-	nbignored=$(bget stats_failed)
-	nbskipped=$(bget stats_skipped)
 
 	cleanup
 
@@ -151,7 +155,11 @@ else
 	run_hook testport_bulk_success \
 		BULK_PORTS_BUILT=$(bget stats_built)
 fi
+nbbuilt=$(bget stats_built)
 
+[ ${BUILD_REPO} -eq 1 -a ${nbbuilt} -gt 0 ] && build_repo
+
+commit_packages
 
 bset status "testing:"
 

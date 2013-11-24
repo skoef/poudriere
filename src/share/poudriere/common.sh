@@ -67,15 +67,15 @@ err() {
 	exit $1
 }
 
-msg_n() { echo -n "====>> $1"; }
-msg() { echo "====>> $1"; }
+msg_n() { echo -n "${DRY_MODE}====>> $1"; }
+msg() { msg_n "$@"; echo; }
 msg_verbose() {
-	[ ${VERBOSE:-0} -gt 0 ] || return 0
+	[ ${VERBOSE} -gt 0 ] || return 0
 	msg "$1"
 }
 
 msg_debug() {
-	[ ${VERBOSE:-0} -gt 1 ] || return 0
+	[ ${VERBOSE} -gt 1 ] || return 0
 	msg "DEBUG: $1" >&2
 }
 
@@ -111,6 +111,10 @@ my_path() {
 
 my_name() {
 	echo ${MASTERNAME}${MY_JOBID+-job-${MY_JOBID}}
+}
+
+log_path() {
+	echo "${POUDRIERE_DATA}/logs/${POUDRIERE_BUILD_TYPE}/${MASTERNAME}/${BUILDNAME}"
 }
 
 eargs() {
@@ -169,7 +173,7 @@ log_start() {
 	exec 3>&1 4>&2
 	[ ! -e ${logfile}.pipe ] && mkfifo ${logfile}.pipe
 	{
-		if [ "${TIMESTAMP_LOGS:-no}" = "yes" ]; then
+		if [ "${TIMESTAMP_LOGS}" = "yes" ]; then
 			tee ${logfile} | while read line; do
 				echo "$(date "+%Y%m%d%H%M.%S") ${line}";
 			done
@@ -184,10 +188,6 @@ log_start() {
 	# The pipe will continue to work as long as we keep
 	# the FD open to it.
 	rm -f ${logfile}.pipe
-}
-
-log_path() {
-	echo "${POUDRIERE_DATA}/logs/${POUDRIERE_BUILD_TYPE}/${MASTERNAME}/${BUILDNAME}"
 }
 
 buildlog_start() {
@@ -416,7 +416,7 @@ siginfo_handler() {
 			origin=${tmporigin%:*}
 			phase="${status%%:*}"
 			if [ -n "${origin}" -a "${origin}" != "${status}" ]; then
-				pkgname=$(cache_get_pkgname ${origin})
+				cache_get_pkgname pkgname "${origin}"
 				# Find the buildtime for this pkgname
 				for pkgname_buildtime in $pkgname_buildtimes; do
 					[ "${pkgname_buildtime%!*}" = "${pkgname}" ] || continue
@@ -570,7 +570,7 @@ markfs() {
 ./packages/*
 ./portdistfiles/*
 ./poudriere/*
-./proc/*
+./proc
 ./root/*
 ./sbin/*
 ./sys
@@ -602,7 +602,7 @@ EOF
 ./packages/*
 ./portdistfiles/*
 ./poudriere/*
-./proc/*
+./proc
 ./root/*
 ./sbin/*
 ./sys
@@ -642,7 +642,7 @@ EOF
 ./packages/*
 ./portdistfiles/*
 ./poudriere/*
-./proc/*
+./proc
 ./root/*
 ./sbin/*
 ./sys
@@ -727,9 +727,9 @@ do_portbuild_mounts() {
 	[ ${TMPFS_WRKDIR} -eq 1 ] && mount -t tmpfs tmpfs ${mnt}/wrkdirs
 	# Only show mounting messages once, not for every builder
 	if [ ${mnt##*/} = "ref" ]; then
-		[ -d "${CCACHE_DIR:-/nonexistent}" ] &&
+		[ -d "${CCACHE_DIR}" ] &&
 			msg "Mounting ccache from: ${CCACHE_DIR}"
-		msg "Mounting packages from: ${PACKAGES}"
+		msg "Mounting packages from: ${PACKAGES_ROOT}"
 	fi
 
 	${NULLMOUNT} -o ro ${portsdir} ${mnt}/usr/ports ||
@@ -748,6 +748,141 @@ do_portbuild_mounts() {
 	done
 
 	return 0
+}
+
+# Convert the repository to the new format of links
+# so that an atomic update can be done at the end
+# of the build.
+# This is done at the package repo level instead of the parent
+# dir in DATA/packages because someone may have created a separate
+# ZFS dataset / NFS mount for each dataset. Avoid cross-device linking.
+convert_repository() {
+	local pkgdir
+
+	msg "Converting package repository to new format"
+
+	pkgdir=.real_$(date +%s)
+	mkdir ${PACKAGES}/${pkgdir}
+
+	# Move all top-level dirs into .real
+	find ${PACKAGES}/ -mindepth 1 -maxdepth 1 -type d ! -name ${pkgdir} |
+	    xargs -J % mv % ${PACKAGES}/${pkgdir}
+	# Symlink them over through .latest
+	find ${PACKAGES}/${pkgdir} -mindepth 1 -maxdepth 1 -type d \
+	    ! -name ${pkgdir} | while read directory; do
+		dirname=${directory##*/}
+		ln -s .latest/${dirname} ${PACKAGES}/${dirname}
+	done
+
+	# Now move+symlink any files in the top-level
+	find ${PACKAGES}/ -mindepth 1 -maxdepth 1 -type f |
+	    xargs -J % mv % ${PACKAGES}/${pkgdir}
+	find ${PACKAGES}/${pkgdir} -mindepth 1 -maxdepth 1 -type f |
+	    while read file; do
+		fname=${file##*/}
+		ln -s .latest/${fname} ${PACKAGES}/${fname}
+	done
+
+	# Setup current symlink which is how the build will atomically finish
+	ln -s ${pkgdir} ${PACKAGES}/.latest
+}
+
+stash_packages() {
+
+	[ "${ATOMIC_PACKAGE_REPOSITORY}" = "yes" ] || return 0
+
+	[ -L ${PACKAGES}/.latest ] || convert_repository
+
+	if [ -d ${PACKAGES}/.building ]; then
+		# If the .building directory is still around, use it. The
+		# previous build may have failed, but all of the successful
+		# packages are still worth keeping for this build.
+		msg "Using packages from previously failed build"
+	else
+		msg "Stashing existing package repository"
+
+		# Use a linked shadow directory in the package root, not
+		# in the parent directory as the user may have created
+		# a separate ZFS dataset or NFS mount for each package
+		# set; Must stay on the same device for linking.
+
+		mkdir -p ${PACKAGES}/.building
+		# hardlink copy all top-level directories
+		find ${PACKAGES}/.latest/ -mindepth 1 -maxdepth 1 -type d \
+		    ! -name .building | xargs -J % cp -al % ${PACKAGES}/.building
+
+		# Copy all top-level files to avoid appending
+		# to real copy in pkg-repo, etc.
+		find ${PACKAGES}/.latest/ -mindepth 1 -maxdepth 1 -type f |
+		    xargs -J % cp -a % ${PACKAGES}/.building
+	fi
+
+	# From this point forward, only work in the shadow
+	# package dir
+	PACKAGES_ROOT=${PACKAGES}
+	PACKAGES=${PACKAGES}/.building
+}
+
+commit_packages() {
+	local pkgdir_old pkgdir_new
+
+	[ "${ATOMIC_PACKAGE_REPOSITORY}" = "yes" ] || return 0
+	if [ "${COMMIT_PACKAGES_ON_FAILURE}" = "no" ] &&
+	    [ $(bget stats_failed) -gt 0 ]; then
+		msg "Not committing packages to repository as failures were encountered"
+		return 0
+	fi
+
+	msg "Committing packages to repository"
+
+	# Find any new top-level files not symlinked yet. This is
+	# mostly incase pkg adds a new top-level repo or the ports framework
+	# starts creating a new directory
+	find ${PACKAGES}/ -mindepth 1 -maxdepth 1 ! -name '.*' |
+	    while read path; do
+		name=${path##*/}
+		[ ! -L "${PACKAGES_ROOT}/${name}" ] || continue
+		ln -s .latest/${name} ${PACKAGES_ROOT}/${name}
+	done
+
+	pkgdir_old=$(realpath ${PACKAGES_ROOT}/.latest)
+
+	# Rename shadow dir to a production name
+	pkgdir_new=.real_$(date +%s)
+	mv ${PACKAGES_ROOT}/.building ${PACKAGES_ROOT}/${pkgdir_new}
+
+	# XXX: Copy in packages that failed to build
+
+	# Switch latest symlink to new build
+	PACKAGES=${PACKAGES_ROOT}/.latest
+	ln -s ${pkgdir_new} ${PACKAGES_ROOT}/.latest_new
+	mv -fh ${PACKAGES_ROOT}/.latest_new ${PACKAGES}
+
+	# Look for broken top-level links and remove them, if they reference
+	# the old directory
+	find ${PACKAGES_ROOT}/ -mindepth 1 -maxdepth 1 ! -name '.*' -type l |
+	    while read path; do
+		# Skip if not a broken link
+		[ ! -e "${path}" ] || continue
+		link=$(readlink ${path})
+		# Skip if link does not reference inside latest
+		[ "${link##.latest}" != "${link}" ] || continue
+		rm -f ${path}
+	done
+
+
+	msg "Removing old packages"
+
+	if [ "${KEEP_OLD_PACKAGES}" = "yes" ]; then
+		keep_cnt=$((${KEEP_OLD_PACKAGES_COUNT} + 1))
+		find ${PACKAGES_ROOT} -type d -mindepth 1 -maxdepth 1 \
+		    -name '.real_*' | sort -Vr |
+		    sed -n "${keep_cnt},\$p" |
+		    xargs rm -rf 2>/dev/null || :
+	else
+		# Remove old and shadow dir
+		rm -rf ${pkgdir_old} 2>/dev/null || :
+	fi
 }
 
 load_blacklist() {
@@ -812,9 +947,9 @@ sanity_check_pkg() {
 	local pkg="$1"
 	local depfile origin
 
-	origin=$(pkg_get_origin "${pkg}")
+	pkg_get_origin origin "${pkg}"
 	port_is_needed "${origin}" || return 0
-	depfile="$(deps_file "${pkg}")"
+	deps_file depfile "${pkg}"
 	while read dep; do
 		if [ ! -e "${PACKAGES}/All/${dep}.${PKG_EXT}" ]; then
 			msg_debug "${pkg} needs missing ${PACKAGES}/All/${dep}.${PKG_EXT}"
@@ -871,6 +1006,14 @@ check_leftovers() {
 			echo "- ${mnt}/${l% *}"
 			;;
 		*changed) echo "M ${mnt}/${l% *}" ;;
+		extra:*)
+			if [ -d ${mnt}/${l#* } ]; then
+				find ${mnt}/${l#* } -exec echo "+ {}" \;
+			else
+				echo "+ ${mnt}/${l#* }"
+			fi
+			;;
+		*:*) echo "M ${mnt}/${l%:*}" ;;
 		esac
 	done
 }
@@ -1362,7 +1505,7 @@ save_wrkdir() {
 	local tarname=${tardir}/${PKGNAME}.${WRKDIR_ARCHIVE_FORMAT}
 	local mnted_portdir=${mnt}/wrkdirs/${portdir}
 
-	[ "${SAVE_WRKDIR:-no}" != "no" ] || return 0
+	[ "${SAVE_WRKDIR}" != "no" ] || return 0
 	# Only save if not in fetch/checksum phase
 	[ "${failed_phase}" != "fetch" -a "${failed_phase}" != "checksum" -a \
 		"${failed_phase}" != "extract" ] || return 0
@@ -1431,10 +1574,13 @@ queue_empty() {
 mark_done() {
 	[ $# -eq 1 ] || eargs pkgname
 	local pkgname="$1"
-	local origin=$(cache_get_origin "${pkgname}")
-	local cache_dir=$(cache_dir)
+	local origin
+	local cache_dir
 
-	if [ "${TRACK_BUILDTIMES:-no}" != "no" ]; then
+	cache_get_origin origin "${pkgname}"
+	get_cache_dir cache_dir
+
+	if [ "${TRACK_BUILDTIMES}" != "no" ]; then
 		echo -n "${origin} $(date +%s) " >> ${cache_dir}/buildtimes
 		stat -f "%m" ${MASTERMNT}/poudriere/building/${pkgname} >> \
 			${cache_dir}/buildtimes
@@ -1471,7 +1617,7 @@ build_queue() {
 
 			[ ${queue_empty} -eq 0 ] || continue
 
-			pkgname=$(next_in_queue)
+			next_in_queue pkgname
 			if [ -z "${pkgname}" ]; then
 				# Check if the ready-to-build pool and need-to-build pools
 				# are empty
@@ -1559,12 +1705,7 @@ stop_html_json() {
 	rm -f ${log}/.data.json.tmp ${log}/.data.mini.json 2>/dev/null || :
 }
 
-# Build ports in parallel
-# Returns when all are built.
-parallel_build() {
-	local jname=$1
-	local ptname=$2
-	local setname=$3
+calculate_tobuild() {
 	local nbq=$(bget stats_queued)
 	local nbb=$(bget stats_built)
 	local nbf=$(bget stats_failed)
@@ -1572,7 +1713,18 @@ parallel_build() {
 	local nbs=$(bget stats_skipped)
 	local ndone=$((nbb + nbf + nbi + nbs))
 	local nremaining=$((nbq - ndone))
+
+	echo ${nremaining}
+}
+
+# Build ports in parallel
+# Returns when all are built.
+parallel_build() {
+	local jname=$1
+	local ptname=$2
+	local setname=$3
 	local real_parallel_jobs=${PARALLEL_JOBS}
+	local nremaining=$(calculate_tobuild)
 
 	# If pool is empty, just return
 	[ ${nremaining} -eq 0 ] && return 0
@@ -1619,11 +1771,11 @@ clean_pool() {
 	local clean_rdepends=$2
 	local port skipped_origin
 
-	[ ${clean_rdepends} -eq 1 ] && port=$(cache_get_origin "${pkgname}")
+	[ ${clean_rdepends} -eq 1 ] && cache_get_origin port "${pkgname}"
 
 	# Cleaning queue (pool is cleaned here)
 	sh ${SCRIPTPREFIX}/clean.sh "${MASTERMNT}" "${pkgname}" ${clean_rdepends} | sort -u | while read skipped_pkgname; do
-		skipped_origin=$(cache_get_origin "${skipped_pkgname}")
+		cache_get_origin skipped_origin "${skipped_pkgname}"
 		badd ports.skipped "${skipped_origin} ${skipped_pkgname} ${pkgname}"
 		job_msg "Skipping build of ${skipped_origin}: Dependent port ${port} failed"
 		run_hook pkgbuild RESULT=skipped \
@@ -1662,7 +1814,7 @@ build_pkg() {
 	trap '' SIGTSTP
 
 	export PKGNAME="${pkgname}" # set ASAP so cleanup() can use it
-	port=$(cache_get_origin ${pkgname})
+	cache_get_origin port "${pkgname}"
 	portdir="/usr/ports/${port}"
 
 	job_msg "Starting build of ${port}"
@@ -1807,49 +1959,65 @@ list_deps() {
 }
 
 deps_file() {
-	[ $# -ne 1 ] && eargs pkg
-	local pkg="$1"
-	local depfile="$(pkg_cache_dir "${pkg}")/deps"
+	[ $# -ne 2 ] && eargs var_return pkg
+	local var_return="$1"
+	local pkg="$2"
+	local pkg_cache_dir
+	local _depfile
 
-	if [ ! -f "${depfile}" ]; then
+	get_pkg_cache_dir pkg_cache_dir "${pkg}"
+	_depfile="${pkg_cache_dir}/deps"
+
+	if [ ! -f "${_depfile}" ]; then
 		if [ "${PKG_EXT}" = "tbz" ]; then
-			injail tar -qxf "/packages/All/${pkg##*/}" -O +CONTENTS | awk '$1 == "@pkgdep" { print $2 }' > "${depfile}"
+			injail tar -qxf "/packages/All/${pkg##*/}" -O +CONTENTS | awk '$1 == "@pkgdep" { print $2 }' > "${_depfile}"
 		else
-			injail /poudriere/pkg-static info -qdF "/packages/All/${pkg##*/}" > "${depfile}"
+			injail /poudriere/pkg-static info -qdF "/packages/All/${pkg##*/}" > "${_depfile}"
 		fi
 	fi
 
-	echo ${depfile}
+	setvar "${var_return}" "${_depfile}"
 }
 
 pkg_get_origin() {
-	[ $# -lt 1 ] && eargs pkg
-	local pkg="$1"
-	local originfile="$(pkg_cache_dir "${pkg}")/origin"
-	local origin=$2
+	[ $# -lt 2 ] && eargs var_return pkg
+	local var_return="$1"
+	local pkg="$2"
+	local _origin=$3
+	local pkg_cache_dir
+	local originfile
+
+	get_pkg_cache_dir pkg_cache_dir "${pkg}"
+	originfile="${pkg_cache_dir}/origin"
 
 	if [ ! -f "${originfile}" ]; then
-		if [ -z "${origin}" ]; then
+		if [ -z "${_origin}" ]; then
 			if [ "${PKG_EXT}" = "tbz" ]; then
-				origin=$(injail tar -qxf "/packages/All/${pkg##*/}" -O +CONTENTS | \
+				_origin=$(injail tar -qxf "/packages/All/${pkg##*/}" -O +CONTENTS | \
 					awk -F: '$1 == "@comment ORIGIN" { print $2 }')
 			else
-				origin=$(injail /poudriere/pkg-static query -F \
+				_origin=$(injail /poudriere/pkg-static query -F \
 					"/packages/All/${pkg##*/}" "%o")
 			fi
 		fi
-		echo ${origin} > "${originfile}"
+		echo ${_origin} > "${originfile}"
 	else
-		read origin < "${originfile}"
+		read _origin < "${originfile}"
 	fi
-	echo ${origin}
+
+	setvar "${var_return}" "${_origin}"
 }
 
 pkg_get_dep_origin() {
-	[ $# -ne 1 ] && eargs pkg
-	local pkg="$1"
-	local dep_origin_file="$(pkg_cache_dir "${pkg}")/dep_origin"
+	[ $# -ne 2 ] && eargs var_return pkg
+	local var_return="$1"
+	local pkg="$2"
+	local dep_origin_file
+	local pkg_cache_dir
 	local compiled_dep_origins
+
+	get_pkg_cache_dir pkg_cache_dir "${pkg}"
+	dep_origin_file="${pkg_cache_dir}/dep_origin"
 
 	if [ ! -f "${dep_origin_file}" ]; then
 		if [ "${PKG_EXT}" = "tbz" ]; then
@@ -1860,34 +2028,51 @@ pkg_get_dep_origin() {
 				"/packages/All/${pkg##*/}" '%do' | tr '\n' ' ')
 		fi
 		echo "${compiled_dep_origins}" > "${dep_origin_file}"
-		echo "${compiled_dep_origins}"
+		setvar "${var_return}" "${compiled_dep_origins}"
 		return 0
 	fi
 
-	cat "${dep_origin_file}"
+	while read line; do
+		compiled_dep_origins="${deps} ${line}"
+	done < "${dep_origin_file}"
+
+	setvar "${var_return}" "${compiled_dep_origins}"
 }
 
 pkg_get_options() {
-	[ $# -ne 1 ] && eargs pkg
-	local pkg="$1"
-	local optionsfile="$(pkg_cache_dir "${pkg}")/options"
-	local compiled_options
+	[ $# -ne 2 ] && eargs var_return pkg
+	local var_return="$1"
+	local pkg="$2"
+	local optionsfile
+	local pkg_cache_dir
+	local _compiled_options
+
+	get_pkg_cache_dir pkg_cache_dir "${pkg}"
+	optionsfile="${pkg_cache_dir}/options"
 
 	if [ ! -f "${optionsfile}" ]; then
 		if [ "${PKG_EXT}" = "tbz" ]; then
-			compiled_options=$(injail tar -qxf "/packages/All/${pkg##*/}" -O +CONTENTS | \
+			_compiled_options=$(injail tar -qxf "/packages/All/${pkg##*/}" -O +CONTENTS | \
 				awk -F: '$1 == "@comment OPTIONS" {print $2}' | tr ' ' '\n' | \
 				sed -n 's/^\+\(.*\)/\1/p' | sort | tr '\n' ' ')
 		else
-			compiled_options=$(injail /poudriere/pkg-static query -F \
+			_compiled_options=$(injail /poudriere/pkg-static query -F \
 				"/packages/All/${pkg##*/}" '%Ov%Ok' | sed '/^off/d;s/^on//' | sort | tr '\n' ' ')
 		fi
-		echo "${compiled_options}" > "${optionsfile}"
-		echo "${compiled_options}"
+		echo "${_compiled_options}" > "${optionsfile}"
+		setvar "${var_return}" "${_compiled_options}"
 		return 0
 	fi
-	# optionsfile is multi-line, no point for read< trick here
-	cat "${optionsfile}"
+
+	# Special care here to match whitespace of 'pretty-print-config'
+	while read line; do
+		_compiled_options="${_compiled_options}${_compiled_options:+ }${line}"
+	done < "${optionsfile}"
+
+	# Space on end to match 'pretty-print-config' in delete_old_pkg
+	[ -n "${_compiled_options}" ] &&
+	    _compiled_options="${_compiled_options} "
+	setvar "${var_return}" "${_compiled_options}"
 }
 
 ensure_pkg_installed() {
@@ -1903,46 +2088,58 @@ ensure_pkg_installed() {
 
 pkg_cache_data() {
 	[ $# -ne 2 ] && eargs pkg origin
+	local - # Make `set +e` local
 	# Ignore errors in here
 	set +e
+
 	local pkg="$1"
 	local origin=$2
-	local cachedir="$(pkg_cache_dir "${pkg}")"
-	local originfile="${cachedir}/origin"
+	local pkg_cache_dir
+	local originfile
+
+	get_pkg_cache_dir pkg_cache_dir "${pkg}"
+	originfile="${pkg_cache_dir}/origin"
 
 	ensure_pkg_installed
-	mkdir -p "$(pkg_cache_dir "${pkg}")"
-	pkg_get_options "${pkg}" > /dev/null
-	pkg_get_origin "${pkg}" ${origin} > /dev/null
-	pkg_get_dep_origin "${pkg}" > /dev/null
-	deps_file "${pkg}" > /dev/null
-	set -e
+	pkg_get_options _ignored "${pkg}" > /dev/null
+	pkg_get_origin _ignored "${pkg}" ${origin} > /dev/null
+	pkg_get_dep_origin _ignored "${pkg}" > /dev/null
+	deps_file _ignored "${pkg}" > /dev/null
 }
 
-cache_dir() {
-	echo ${POUDRIERE_DATA}/cache/${MASTERNAME}
+get_cache_dir() {
+	local var_return="$1"
+	setvar "${var_return}" ${POUDRIERE_DATA}/cache/${MASTERNAME}
 }
 
 # Return the cache dir for the given pkg
+# @param var_return The variable to set the result in
 # @param string pkg $PKGDIR/All/PKGNAME.PKG_EXT
-pkg_cache_dir() {
-	[ $# -ne 1 ] && eargs pkg
-	local pkg="$1"
+get_pkg_cache_dir() {
+	[ $# -ne 2 ] && eargs var_return pkg
+	local var_return="$1"
+	local pkg="$2"
 	local pkg_file="${pkg##*/}"
 	local pkg_dir
+	local cache_dir
 
-	pkg_dir="$(cache_dir)/${pkg_file}"
+	get_cache_dir cache_dir
+
+	pkg_dir="${cache_dir}/${pkg_file}"
 
 	[ -d "${pkg_dir}" ] || mkdir -p "${pkg_dir}"
 
-	echo "${pkg_dir}"
+	setvar "${var_return}" "${pkg_dir}"
 }
 
 clear_pkg_cache() {
 	[ $# -ne 1 ] && eargs pkg
 	local pkg="$1"
+	local pkg_cache_dir
 
-	rm -fr "$(pkg_cache_dir "${pkg}")"
+	get_pkg_cache_dir pkg_cache_dir "${pkg}"
+
+	rm -fr "${pkg_cache_dir}"
 }
 
 delete_pkg() {
@@ -1958,13 +2155,15 @@ delete_pkg() {
 # Deleted cached information for stale packages (manually removed)
 delete_stale_pkg_cache() {
 	local pkgname
-	local cachedir=$(cache_dir)
+	local cache_dir
+
+	get_cache_dir cache_dir
 
 	msg_verbose "Checking for stale cache files"
 
-	[ ! -d ${cachedir} ] && return 0
-	dirempty ${cachedir} && return 0
-	for pkg in ${cachedir}/*.${PKG_EXT}; do
+	[ ! -d ${cache_dir} ] && return 0
+	dirempty ${cache_dir} && return 0
+	for pkg in ${cache_dir}/*.${PKG_EXT}; do
 		pkg_file="${pkg##*/}"
 		# If this package no longer exists in the PKGDIR, delete the cache.
 		[ ! -e "${PACKAGES}/All/${pkg_file}" ] &&
@@ -1980,7 +2179,7 @@ delete_old_pkg() {
 	local mnt pkgname cached_pkgname
 	local o v v2 compiled_options current_options current_deps compiled_deps
 
-	o=$(pkg_get_origin "${pkg}")
+	pkg_get_origin o "${pkg}"
 	port_is_needed "${o}" || return 0
 
 	mnt=$(my_path)
@@ -1993,7 +2192,7 @@ delete_old_pkg() {
 
 	v="${pkg##*-}"
 	v=${v%.*}
-	cached_pkgname=$(cache_get_pkgname ${o})
+	cache_get_pkgname cached_pkgname "${o}"
 	v2=${cached_pkgname##*-}
 	if [ "$v" != "$v2" ]; then
 		msg "Deleting old version: ${pkg##*/}"
@@ -2003,7 +2202,7 @@ delete_old_pkg() {
 
 	# Detect ports that have new dependencies that the existing packages
 	# do not have and delete them.
-	if [ "${CHECK_CHANGED_DEPS:-yes}" != "no" ]; then
+	if [ "${CHECK_CHANGED_DEPS}" != "no" ]; then
 		current_deps=""
 		liblist=""
 		# FIXME: Move into Infrastructure/scripts and 
@@ -2056,7 +2255,8 @@ delete_old_pkg() {
 				esac
 			done
 		done
-		compiled_deps=$(pkg_get_dep_origin "${pkg}")
+		pkg_get_dep_origin compiled_deps "${pkg}"
+
 		for d in ${current_deps}; do
 			case " $compiled_deps " in
 			*\ $d\ *) ;;
@@ -2070,10 +2270,10 @@ delete_old_pkg() {
 	fi
 
 	# Check if the compiled options match the current options from make.conf and /var/db/ports
-	if [ "${CHECK_CHANGED_OPTIONS:-verbose}" != "no" ]; then
+	if [ "${CHECK_CHANGED_OPTIONS}" != "no" ]; then
 		current_options=$(injail make -C /usr/ports/${o} pretty-print-config | \
 			tr ' ' '\n' | sed -n 's/^\+\(.*\)/\1/p' | sort | tr '\n' ' ')
-		compiled_options=$(pkg_get_options "${pkg}")
+		pkg_get_options compiled_options "${pkg}"
 
 		if [ "${compiled_options}" != "${current_options}" ]; then
 			msg "Options changed, deleting: ${pkg##*/}"
@@ -2112,16 +2312,19 @@ delete_old_pkgs() {
 ## Then move the package to the "building" dir in building/
 ## This is only ran from 1 process
 next_in_queue() {
-	local p pkgname
+	local var_return="$1"
+	local p _pkgname
 
 	[ ! -d ${MASTERMNT}/poudriere/pool ] && err 1 "Build pool is missing"
 	p=$(find ${POOL_BUCKET_DIRS} -type d -depth 1 -empty -print -quit || :)
-	[ -n "$p" ] || return 0
-	pkgname=${p##*/}
-	mv ${p} ${MASTERMNT}/poudriere/building/${pkgname}
-	# Update timestamp for buildtime accounting
-	touch ${MASTERMNT}/poudriere/building/${pkgname}
-	echo ${pkgname}
+	if [ -n "$p" ]; then
+		_pkgname=${p##*/}
+		mv ${p} ${MASTERMNT}/poudriere/building/${_pkgname}
+		# Update timestamp for buildtime accounting
+		touch ${MASTERMNT}/poudriere/building/${_pkgname}
+	fi
+
+	setvar "${var_return}" "${_pkgname}"
 }
 
 lock_acquire() {
@@ -2143,42 +2346,47 @@ lock_release() {
 }
 
 cache_get_pkgname() {
-	[ $# -ne 1 ] && eargs origin
-	local origin=${1%/}
-	local pkgname="" existing_origin
+	[ $# -ne 2 ] && eargs var_return origin
+	local var_return="$1"
+	local origin=${2%/}
+	local _pkgname="" existing_origin
 	local cache_origin_pkgname=${MASTERMNT}/poudriere/var/cache/origin-pkgname/${origin%%/*}_${origin##*/}
 	local cache_pkgname_origin
 
-	[ -f ${cache_origin_pkgname} ] && read pkgname < ${cache_origin_pkgname}
+	[ -f ${cache_origin_pkgname} ] && read _pkgname < ${cache_origin_pkgname}
 
 	# Add to cache if not found.
-	if [ -z "${pkgname}" ]; then
+	if [ -z "${_pkgname}" ]; then
 		[ -d "${MASTERMNT}/usr/ports/${origin}" ] ||
 			err 1 "Invalid port origin '${origin}' not found."
-		pkgname=$(injail make -C /usr/ports/${origin} -VPKGNAME ||
+		_pkgname=$(injail make -C /usr/ports/${origin} -VPKGNAME ||
 			err 1 "Error getting PKGNAME for ${origin}")
-		[ -n "${pkgname}" ] || err 1 "Missing PKGNAME for ${origin}"
+		[ -n "${_pkgname}" ] || err 1 "Missing PKGNAME for ${origin}"
 		# Make sure this origin did not already exist
-		existing_origin=$(cache_get_origin "${pkgname}" 2>/dev/null || :)
+		cache_get_origin existing_origin "${_pkgname}" 2>/dev/null || :
 		# It may already exist due to race conditions, it is not harmful. Just ignore.
 		if [ "${existing_origin}" != "${origin}" ]; then
 			[ -n "${existing_origin}" ] &&
-				err 1 "Duplicated origin for ${pkgname}: ${origin} AND ${existing_origin}. Rerun with -vv to see which ports are depending on these."
-			echo "${pkgname}" > ${cache_origin_pkgname}
-			cache_pkgname_origin="${MASTERMNT}/poudriere/var/cache/pkgname-origin/${pkgname}"
+				err 1 "Duplicated origin for ${_pkgname}: ${origin} AND ${existing_origin}. Rerun with -vv to see which ports are depending on these."
+			echo "${_pkgname}" > ${cache_origin_pkgname}
+			cache_pkgname_origin="${MASTERMNT}/poudriere/var/cache/pkgname-origin/${_pkgname}"
 			echo "${origin}" > "${cache_pkgname_origin}"
 		fi
 	fi
 
-	echo ${pkgname}
+	setvar "${var_return}" "${_pkgname}"
 }
 
 cache_get_origin() {
-	[ $# -ne 1 ] && eargs pkgname
-	local pkgname=$1
+	[ $# -ne 2 ] && eargs var_return pkgname
+	local var_return="$1"
+	local pkgname="$2"
 	local cache_pkgname_origin="${MASTERMNT}/poudriere/var/cache/pkgname-origin/${pkgname}"
+	local _origin
 
-	cat "${cache_pkgname_origin%/}"
+	read _origin < "${cache_pkgname_origin%/}"
+
+	setvar "${var_return}" "${_origin}"
 }
 
 # Take optional pkgname to speedup lookup
@@ -2186,9 +2394,13 @@ compute_deps() {
 	[ $# -lt 1 ] && eargs port
 	[ $# -gt 2 ] && eargs port pkgnme
 	local port=$1
-	local pkgname="${2:-$(cache_get_pkgname ${port})}"
+	local pkgname="$2"
 	local dep_pkgname dep_port
-	local pkg_pooldir="${MASTERMNT}/poudriere/deps/${pkgname}"
+	local pkg_pooldir
+
+	[ -z "${pkgname}" ] && cache_get_pkgname pkgname "${port}"
+	pkg_pooldir="${MASTERMNT}/poudriere/deps/${pkgname}"
+
 	mkdir "${pkg_pooldir}" 2>/dev/null || return 0
 
 	msg_verbose "Computing deps for ${port}"
@@ -2200,11 +2412,11 @@ compute_deps() {
 		# Detect bad cat/origin/ dependency which pkgng will not register properly
 		[ "${dep_port}" = "${dep_port%/}" ] ||
 			err 1 "${port} depends on bad origin '${dep_port}'; Please contact maintainer of the port to fix this."
-		dep_pkgname=$(cache_get_pkgname ${dep_port})
+		cache_get_pkgname dep_pkgname "${dep_port}"
 
 		# Only do this if it's not already done, and not ALL, as everything will
 		# be touched anyway
-		[ ${ALL:-0} -eq 0 ] && ! [ -d "${MASTERMNT}/poudriere/deps/${dep_pkgname}" ] &&
+		[ ${ALL} -eq 0 ] && ! [ -d "${MASTERMNT}/poudriere/deps/${dep_pkgname}" ] &&
 			compute_deps "${dep_port}" "${dep_pkgname}"
 
 		:> "${pkg_pooldir}/${dep_pkgname}"
@@ -2217,7 +2429,7 @@ compute_deps() {
 }
 
 listed_ports() {
-	if [ ${ALL:-0} -eq 1 ]; then
+	if [ ${ALL} -eq 1 ]; then
 		PORTSDIR=$(pget ${PTNAME} mnt)
 		[ -d "${PORTSDIR}/ports" ] && PORTSDIR="${PORTSDIR}/ports"
 		for cat in $(awk '$1 == "SUBDIR" { print $3}' ${PORTSDIR}/Makefile); do
@@ -2238,7 +2450,7 @@ port_is_listed() {
 	[ $# -eq 1 ] || eargs origin
 	local origin="$1"
 
-	if [ ${ALL:-0} -eq 1 -o ${PORTTESTING_RECURSIVE:-0} -eq 1 ]; then
+	if [ ${ALL} -eq 1 -o ${PORTTESTING_RECURSIVE} -eq 1 ]; then
 		return 0
 	fi
 
@@ -2252,7 +2464,7 @@ port_is_needed() {
 	[ $# -eq 1 ] || eargs origin
 	local origin="$1"
 
-	[ ${ALL:-0} -eq 1 ] && return 0
+	[ ${ALL} -eq 1 ] && return 0
 
 	awk -vorigin="${origin}" '
 	    $1 == origin || $2 == origin { found=1; exit 0 }
@@ -2263,12 +2475,13 @@ get_porttesting() {
 	[ $# -eq 1 ] || eargs pkgname
 	local pkgname="$1"
 	local porttesting
+	local origin
 
-	if [ -n "${PORTTESTING}" ] && port_is_listed \
-		$(cache_get_origin "${pkgname}"); then
-		porttesting=1
-	else
-		porttesting=
+	if [ -n "${PORTTESTING}" ]; then
+		cache_get_origin origin "${pkgname}"
+		if port_is_listed "${origin}"; then
+			porttesting=1
+		fi
 	fi
 
 	echo $porttesting
@@ -2419,6 +2632,7 @@ prepare_ports() {
 	local pkg
 	local log=$(log_path)
 	local n port pn nbq resuming_build
+	local cache_dir
 
 	msg "Calculating ports order and dependencies"
 	mkdir -p "${MASTERMNT}/poudriere"
@@ -2446,9 +2660,10 @@ prepare_ports() {
 	mkdir -p ${POOL_BUCKET_DIRS}
 
 	if was_a_bulk_run; then
+		get_cache_dir cache_dir
 		mkdir -p ${log}/../../latest-per-pkg ${log}/../latest-per-pkg
 		mkdir -p ${log}/logs ${log}/logs/errors ${log}/assets
-		mkdir -p $(cache_dir)
+		mkdir -p ${cache_dir}
 		ln -sfh ${BUILDNAME} ${log%/*}/latest
 		cp ${HTMLPREFIX}/index.html ${log}
 		cp -R ${HTMLPREFIX}/assets/ ${log}/assets/
@@ -2474,7 +2689,7 @@ prepare_ports() {
 	parallel_start
 	for port in $(listed_ports); do
 		[ -d "${MASTERMNT}/usr/ports/${port}" ] ||
-			err 1 "Invalid port origin: ${port}"
+			err 1 "Invalid port origin listed for build: ${port}"
 		parallel_run compute_deps ${port}
 	done
 	parallel_stop
@@ -2486,9 +2701,18 @@ prepare_ports() {
 	bset status "sanity:"
 
 	if was_a_bulk_run; then
-		if [ ${CLEAN_LISTED:-0} -eq 1 ]; then
+		if [ ${CLEAN} -eq 1 ]; then
+			msg_n "(-c): Cleaning all packages..."
+			rm -rf ${PACKAGES}/*
+			rm -rf ${POUDRIERE_DATA}/cache/${MASTERNAME}
+			echo " done"
+		fi
+
+		if [ ${CLEAN_LISTED} -eq 1 ]; then
+			msg "(-C) Cleaning specified ports to build"
 			listed_ports | while read port; do
-				pkg="${PACKAGES}/All/$(cache_get_pkgname ${port}).${PKG_EXT}"
+				cache_get_pkgname pkgname "${port}"
+				pkg="${PACKAGES}/All/${pkgname}.${PKG_EXT}"
 				if [ -f "${pkg}" ]; then
 					msg "Deleting existing package: ${pkg##*/}"
 					delete_pkg "${pkg}"
@@ -2579,11 +2803,13 @@ prepare_ports() {
 	balance_pool
 
 	# This modifies the slave make.conf only, not reference jail
-	[ -z "${ALLOW_MAKE_JOBS}" ] && echo "DISABLE_MAKE_JOBS=poudriere" \
+	[ -z "${ALLOW_MAKE_JOBS}" ] || echo "DISABLE_MAKE_JOBS=poudriere" \
 	    >> ${MASTERMNT}/etc2/make.conf
 
 	[ -n "${JOBS_LIMIT}" ] && echo "MAKE_JOBS_NUMBER=${JOBS_LIMIT}" \
 		>> ${MASTERMNT}/etc2/make.conf
+
+	return 0
 }
 
 balance_pool() {
@@ -2664,6 +2890,8 @@ clean_restricted() {
 }
 
 build_repo() {
+	local origin
+
 	if [ $PKGNG -eq 1 ]; then
 		msg "Creating pkgng repository"
 		bset status "pkgrepo:"
@@ -2691,10 +2919,10 @@ build_repo() {
 		for pkg_file in ${PACKAGES}/All/*.tbz; do
 			# Check for non-empty directory with no packages in it
 			[ "${pkg}" = "${PACKAGES}/All/*.tbz" ] && break
-			ORIGIN=$(pkg_get_origin ${pkg_file})
-			msg_verbose "Extracting description for ${ORIGIN} ..."
-			[ -d ${MASTERMNT}/usr/ports/${ORIGIN} ] &&
-				injail make -C /usr/ports/${ORIGIN} describe >> ${INDEXF}.1
+			pkg_get_origin origin "${pkg_file}"
+			msg_verbose "Extracting description for ${origin} ..."
+			[ -d ${MASTERMNT}/usr/ports/${origin} ] &&
+				injail make -C /usr/ports/${origin} describe >> ${INDEXF}.1
 		done
 
 		msg_n "Generating INDEX..."
@@ -2881,6 +3109,24 @@ esac
 : ${NOHANG_TIME:=7200}
 : ${PATCHED_FS_KERNEL:=no}
 : ${LESS_SANDBOXING:=no}
+: ${ALL:=0}
+: ${CLEAN:=0}
+: ${CLEAN_LISTED:=0}
+: ${VERBOSE:=0}
+: ${PORTTESTING_RECURSIVE:=0}
+
+# Be sure to update poudriere.conf to document the default when changing these
+: ${MAX_EXECUTION_TIME:=86400}         # 24 hours for 1 command
+: ${NOHANG_TIME:=7200}                 # 120 minutes with no log update
+: ${TIMESTAMP_LOGS:=no}
+: ${ATOMIC_PACKAGE_REPOSITORY:=yes}
+: ${KEEP_OLD_PACKAGES:=no}
+: ${KEEP_OLD_PACKAGES_COUNT:=5}
+: ${SAVE_WRKDIR:=no}
+: ${TRACK_BUILDTIMES:=no}
+: ${CHECK_CHANGED_DEPS:=yes}
+: ${CHECK_CHANGED_OPTIONS:=verbose}
+: ${NO_RESTRICTED:=no}
 
 BUILDNAME=$(date +%Y%m%d_%H%M%S)
 

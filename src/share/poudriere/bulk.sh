@@ -41,6 +41,8 @@ Options:
     -c          -- Clean all the previously built binary packages
     -C          -- Clean only the packages listed on the command line or
                    -f file
+    -n          -- Dry-run. Show what wll be done, but do not build
+                   any packages.
     -R          -- Clean RESTRICTED packages after building
     -t          -- Test the specified ports for leftovers
     -r          -- Resursively test all dependencies as well
@@ -66,13 +68,14 @@ SKIPSANITY=0
 SETNAME=""
 CLEAN=0
 CLEAN_LISTED=0
+DRY_RUN=0
 ALL=0
 BUILD_REPO=0
 . ${SCRIPTPREFIX}/common.sh
 
 [ $# -eq 0 ] && usage
 
-while getopts "B:f:j:J:CcNp:RFtrTsvwz:a" FLAG; do
+while getopts "B:f:j:J:CcnNp:RFtrTsvwz:a" FLAG; do
 	case "${FLAG}" in
 		B)
 			BUILDNAME="${OPTARG}"
@@ -92,6 +95,12 @@ while getopts "B:f:j:J:CcNp:RFtrTsvwz:a" FLAG; do
 			;;
 		C)
 			CLEAN_LISTED=1
+			;;
+		n)
+			[ "${ATOMIC_PACKAGE_REPOSITORY}" = "yes" ] ||
+			    err 1 "ATOMIC_PACKAGE_REPOSITORY required for dry-run support"
+			DRY_RUN=1
+			DRY_MODE="[Dry Run] "
 			;;
 		f)
 			LISTPKGS="${LISTPKGS} ${OPTARG}"
@@ -131,7 +140,7 @@ while getopts "B:f:j:J:CcNp:RFtrTsvwz:a" FLAG; do
 			ALL=1
 			;;
 		v)
-			VERBOSE=$((${VERBOSE:-0} + 1))
+			VERBOSE=$((${VERBOSE} + 1))
 			;;
 		*)
 			usage
@@ -148,16 +157,9 @@ MASTERMNT=${POUDRIERE_DATA}/build/${MASTERNAME}/ref
 
 export MASTERNAME
 export MASTERMNT
-if [ ${CLEAN} -eq 1 ]; then
-	msg_n "Cleaning previous bulks if any..."
-	rm -rf ${POUDRIERE_DATA}/packages/${MASTERNAME}/*
-	rm -rf ${POUDRIERE_DATA}/cache/${MASTERNAME}
-	echo " done"
-fi
+export POUDRIERE_BUILD_TYPE=bulk
 
 check_jobs
-
-export POUDRIERE_BUILD_TYPE=bulk
 
 read_packages_from_params "$@"
 
@@ -174,6 +176,35 @@ prepare_ports
 run_hook bulk_started PORTS_QUEUED=$(bget stats_queued)
 
 markfs prepkg ${MASTERMNT}
+
+if [ ${DRY_RUN} -eq 1 ]; then
+	msg "Dry run mode, cleaning up and exiting"
+	rm -rf ${PACKAGES_ROOT}/.building
+	tobuild=$(calculate_tobuild)
+	if [ ${tobuild} -gt 0 ]; then
+		[ ${PARALLEL_JOBS} -gt ${tobuild} ] &&
+		    PARALLEL_JOBS=${tobuild##* }
+		msg "Would build ${tobuild} packages using ${PARALLEL_JOBS} builders"
+
+		msg_n "Ports to build: "
+		{
+			find ${MASTERMNT}/poudriere/deps/ -mindepth 1 \
+			    -maxdepth 1
+			find ${MASTERMNT}/poudriere/pool/ -mindepth 2 \
+			    -maxdepth 2
+		} | while read pkgpath; do
+			pkgname=${pkgpath##*/}
+			cache_get_origin pkgname "${pkgpath##*/}"
+			echo "${pkgname}"
+		done | sort -u | tr '\n' ' '
+		echo
+	else
+		msg "No packages would be built"
+	fi
+
+	cleanup
+	exit 0
+fi
 
 bset status "building:"
 
@@ -209,12 +240,14 @@ elif [ $nbbuilt -eq 0 ]; then
 	fi
 	BUILD_REPO=0
 else
-	[ "${NO_RESTRICTED:-no}" != "no" ] && clean_restricted
+	[ "${NO_RESTRICTED}" != "no" ] && clean_restricted
 fi
 
 [ ${BUILD_REPO} -eq 1 ] && build_repo
 
+commit_packages
 cleanup
+
 if [ $nbbuilt -gt 0 ]; then
 	msg_n "Built ports: "
 	echo ${built}

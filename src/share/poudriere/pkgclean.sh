@@ -94,7 +94,7 @@ while getopts "aj:J:f:nNp:Rvyz:" FLAG; do
 			NO_RESTRICTED=1
 			;;
 		v)
-			VERBOSE=$((${VERBOSE:-0} + 1))
+			VERBOSE=$((${VERBOSE} + 1))
 			;;
 		y)
 			answer=yes
@@ -145,7 +145,7 @@ FOUND_ORIGINS=$(mktemp -t poudriere_pkgclean)
 for file in ${PACKAGES}/All/*; do
 	case ${file} in
 		*.${PKG_EXT})
-			origin=$(pkg_get_origin "${file}")
+			pkg_get_origin origin "${file}"
 			if ! port_is_needed "${origin}"; then
 				msg_verbose "Found unwanted package: ${file}"
 				echo "${file}" >> ${BADFILES_LIST}
@@ -283,7 +283,7 @@ fi
 # After deleting stale files, need to remake repo.
 
 if [ $deleted_files -eq 1 ]; then
-	[ "${NO_RESTRICTED:-no}" != "no" ] && clean_restricted
+	[ "${NO_RESTRICTED}" != "no" ] && clean_restricted
 	delete_stale_symlinks_and_empty_dirs
 	[ ${BUILD_REPO} -eq 1 ] && build_repo
 fi

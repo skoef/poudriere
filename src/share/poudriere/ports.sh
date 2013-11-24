@@ -107,7 +107,7 @@ while getopts "cudklp:M:m:vq" FLAG; do
 			METHOD=${OPTARG}
 			;;
 		v)
-			VERBOSE=$((${VERBOSE:-0} + 1))
+			VERBOSE=$((${VERBOSE} + 1))
 			QOP=
 			;;
 		*)
