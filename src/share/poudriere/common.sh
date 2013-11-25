@@ -1665,8 +1665,28 @@ start_html_json() {
 	JSON_PID=$!
 }
 
+stress_snapshot() {
+	local AWK1='/\// {sum+=$2; X+=$3} END {printf "%1.2f%%\n", X*100/sum}'
+	local SLOAD=$(sysctl vm.loadavg | awk '{ print $3 }')
+	local SSWAP=$(swapinfo -k | awk "${AWK1}")
+	local ahora=$(date "+%s")
+	local EPOCH=$(bget epoch 2>/dev/null || echo 0)
+	local SELAPSED="--"
+	local elapsed
+	local elhr
+	if [ "${EPOCH}" != "0" ]; then
+		elapsed=$((ahora-EPOCH))
+		elhr=$((elapsed/3600))
+		SELAPSED=$(date -j -u -r ${elapsed} "+${elhr}:%M:%S")
+	fi
+	bset stats_load "${SLOAD}"
+	bset stats_swapinfo "${SSWAP}"
+	bset stats_elapsed "${SELAPSED}"
+}
+
 json_main() {
 	while :; do
+		stress_snapshot
 		build_json
 		sleep 5
 	done
@@ -2741,12 +2761,18 @@ prepare_ports() {
 			bset stats_failed 0
 			bset stats_ignored 0
 			bset stats_skipped 0
+			bset stats_load 0
+			bset stats_swapinfo 0
+			bset stats_elapsed 0
 			:> ${log}/.data.json
 			:> ${log}/.data.mini.json
 			:> ${log}/.poudriere.ports.built
 			:> ${log}/.poudriere.ports.failed
 			:> ${log}/.poudriere.ports.ignored
 			:> ${log}/.poudriere.ports.skipped
+			:> ${log}/.poudriere.ports.load
+			:> ${log}/.poudriere.ports.swapinfo
+			:> ${log}/.poudriere.ports.elapsed
 		fi
 	fi
 

@@ -8,7 +8,7 @@ $.ajaxSetup({
 });
 
 function catwidth (variable, queued) {
-        if (!variable)
+        if (variable == 0)
 		return 0;
 	var width = variable * 500 / queued;
 	return (width < 1) ? 1 : Math.round (width);
@@ -76,6 +76,23 @@ function format_pkgname(pkgname) {
 	return pkgname;
 }
 
+function display_pkghour(stats) {
+	var attempted = parseInt(stats.built) + 
+			parseInt(stats.failed) + 
+			parseInt(stats.skipped) + 
+			parseInt(stats.ignored);
+	var pkghour = "--";
+	var secs, hours, HMS;
+	if (attempted > 0) {
+		HMS = stats.elapsed.split(":");
+		secs =  (parseInt(HMS[0]) * 3600) + 
+			(parseInt(HMS[1]) * 60) + parseInt(HMS[2]);
+		hours = secs / 3600;
+		pkghour = Math.ceil(attempted / hours);
+	}
+	$('#stats_pkghour').html(pkghour);
+}
+
 function update_canvas(stats) {
 	var queued = stats.queued;
 	var built = stats.built;
@@ -93,7 +110,7 @@ function update_canvas(stats) {
 	var context = canvas.getContext('2d');
 
 	context.rect(0, 0, 500, 22);
-	context.fillStyle = '#E3E3E3';
+	context.fillStyle = '#D8D8D8';
 	context.fillRect(0, 1, 500, 20);
 	var x = 0;
 	var mcw = maxcatwidth (built, failed, ignored, skipped, queued);
@@ -203,6 +220,7 @@ function process_data(data) {
 			html = count;
 			$('#stats_' + status).html(html);
 		});
+		display_pkghour (data.stats);
 	}
 
 	/* For each status, track how many of the existing data has been

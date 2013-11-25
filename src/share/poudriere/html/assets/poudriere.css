@@ -62,10 +62,10 @@ th, td { border: 1px solid black; }
 	font-weight: 400;
 }
 .remaining {
-	background-color: #E3E3E3;
+	background-color: #D8D8D8;
 }
 .queued {
-	background-color: #E3E3E3;
+	background-color: #D8D8D8;
 }
 .new { display: none; }
 #header {
@@ -103,6 +103,9 @@ th, td { border: 1px solid black; }
 #stats_built, #stats_failed, #stats_ignored, #stats_skipped {
 	cursor: hand;
 }
+#stats_load, #stats_swapinfo, #stats_elapsed, #stats_pkghour {
+	background-color: #D8D8D8;
+}
 
 /* http://nicolasgallagher.com/jump-links-and-viewport-positioning/demo */
 .anchor {
@@ -121,11 +124,11 @@ th, td { border: 1px solid black; }
 	float: left;
 	width: 650px;
 	margin-left: 8px;
+	margin-right: 0px;
 }
 #header_left { float: left; }
 #header_right {
-	margin-top: 5px;
-	margin-left: 5px;
+	margin: 0px 5px 4px;
 	float: left;
 	width: 1000px;
 }
@@ -145,19 +148,28 @@ th, td { border: 1px solid black; }
 	display: none;
 	margin: 0;
 }
-#stats {
-	float: left;
-}
 #stats table {
-	width: 504px;
+	width: 514px;
 	border: 0;
-	margin-bottom: 1px;
+	margin: 0px 10px;
+	border-collapse: separate;
+	border-spacing: 2px;
 }
 #stats td {
 	width: 16.66%;
 }
+#stress table {
+	width: 342px;
+	border: 0;
+	margin: 2px 94px;
+	border-collapse: separate;
+	border-spacing: 2px;
+}
+#stress td {
+	width: 25%;
+}
 #progress {
-	left: 568px;
+	left: 516px;
 	position: absolute;
 }
 #build_info {
@@ -220,11 +232,11 @@ th, td { border: 1px solid black; }
 
 #builders_table {
 	width: 100%;
-	text-align: center;
 }
 
 #builders_table td:nth-child(1) {
         width: 10%;
+	text-align: center;
 }
 
 #builders_table td:nth-child(3) {
