@@ -78,9 +78,7 @@ function format_pkgname(pkgname) {
 
 function display_pkghour(stats) {
 	var attempted = parseInt(stats.built) + 
-			parseInt(stats.failed) + 
-			parseInt(stats.skipped) + 
-			parseInt(stats.ignored);
+			parseInt(stats.failed);
 	var pkghour = "--";
 	var secs, hours, HMS;
 	if (attempted > 0) {
