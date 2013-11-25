@@ -61,7 +61,12 @@ th, td { border: 1px solid black; }
 	color: #CC0033;
 	font-weight: 400;
 }
-.remaining { background-color: #E3E3E3; }
+.remaining {
+	background-color: #E3E3E3;
+}
+.queued {
+	background-color: #E3E3E3;
+}
 .new { display: none; }
 #header {
 	top: 0;
@@ -144,7 +149,7 @@ th, td { border: 1px solid black; }
 	float: left;
 }
 #stats table {
-	width: 502px;/* canvas size */
+	width: 504px;
 	border: 0;
 	margin-bottom: 1px;
 }
