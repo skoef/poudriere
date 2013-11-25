@@ -3145,7 +3145,7 @@ esac
 : ${MAX_EXECUTION_TIME:=86400}         # 24 hours for 1 command
 : ${NOHANG_TIME:=7200}                 # 120 minutes with no log update
 : ${TIMESTAMP_LOGS:=no}
-: ${ATOMIC_PACKAGE_REPOSITORY:=yes}
+: ${ATOMIC_PACKAGE_REPOSITORY:=no}
 : ${KEEP_OLD_PACKAGES:=no}
 : ${KEEP_OLD_PACKAGES_COUNT:=5}
 : ${SAVE_WRKDIR:=no}
