@@ -171,6 +171,7 @@ th, td { border: 1px solid black; }
 
 #built_table td:nth-child(3) {
         width: 10%;
+	text-align: center;
 }
 
 #failed_table td:nth-child(2) {
@@ -183,10 +184,12 @@ th, td { border: 1px solid black; }
 
 #failed_table td:nth-child(4) {
         width: 10%;
+	text-align: center;
 }
 
 #failed_table td:nth-child(5) {
         width: 10%;
+	text-align: center;
 }
 
 #skipped_table td:nth-child(1) {
@@ -207,10 +210,12 @@ th, td { border: 1px solid black; }
 
 #ignored_table td:nth-child(3) {
         width: 10%;
+	text-align: center;
 }
 
 #builders_table {
 	width: 100%;
+	text-align: center;
 }
 
 #builders_table td:nth-child(1) {
