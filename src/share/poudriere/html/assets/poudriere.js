@@ -1,6 +1,8 @@
 // vim: set sts=4 sw=4 ts=4 noet:
 var updateInterval = 8;
 var first_run = true;
+var impulseData = new Array();
+var tracker = 0;
 
 /* Disabling jQuery caching */
 $.ajaxSetup({
@@ -45,7 +47,7 @@ function update_fields() {
 		},
 		error: function(data) {
 			/* May not be there yet, try again shortly */
-			setTimeout(update_fields, 4 * 1000);
+			setTimeout(update_fields, updateInterval * 500);
 		}
 	});
 }
@@ -76,19 +78,41 @@ function format_pkgname(pkgname) {
 	return pkgname;
 }
 
+function elapsed_seconds(stats_elapsed) {
+	var HMS = stats_elapsed.split(":");
+	return  (parseInt(HMS[0]) * 3600) + 
+		(parseInt(HMS[1]) * 60) + parseInt(HMS[2]);
+}
+
 function display_pkghour(stats) {
-	var attempted = parseInt(stats.built) + 
-			parseInt(stats.failed);
+	var attempted = parseInt(stats.built) + parseInt(stats.failed);
 	var pkghour = "--";
-	var secs, hours, HMS;
 	if (attempted > 0) {
-		HMS = stats.elapsed.split(":");
-		secs =  (parseInt(HMS[0]) * 3600) + 
-			(parseInt(HMS[1]) * 60) + parseInt(HMS[2]);
-		hours = secs / 3600;
+		var hours = elapsed_seconds (stats.elapsed) / 3600;
 		pkghour = Math.ceil(attempted / hours);
 	}
 	$('#stats_pkghour').html(pkghour);
+}
+
+function display_impulse(stats) {
+	var attempted = parseInt(stats.built) + parseInt(stats.failed);
+	var pkghour = "--";
+	var secs = elapsed_seconds (stats.elapsed);
+	var index = tracker % 75;
+	if (tracker < 75) {
+		impulseData.push({pkgs: attempted, time: secs});
+	} else {
+		impulseData[index].pkgs = attempted;
+		impulseData[index].time = secs;
+	}
+	if (tracker >= 15) {
+		var tail = (tracker < 75) ? 0 : (tracker - 74) % 75;
+		var d_pkgs = impulseData[index].pkgs - impulseData[tail].pkgs;
+		var d_secs = impulseData[index].time - impulseData[tail].time;
+		pkghour = Math.ceil(d_pkgs / (d_secs / 3600));
+	}
+	tracker++;
+	$('#stats_impulse').html(pkghour);
 }
 
 function update_canvas(stats) {
@@ -219,6 +243,7 @@ function process_data(data) {
 			$('#stats_' + status).html(html);
 		});
 		display_pkghour (data.stats);
+		display_impulse (data.stats);
 	}
 
 	/* For each status, track how many of the existing data has been

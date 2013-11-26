@@ -103,7 +103,7 @@ th, td { border: 1px solid black; }
 #stats_built, #stats_failed, #stats_ignored, #stats_skipped {
 	cursor: hand;
 }
-#stats_load, #stats_swapinfo, #stats_elapsed, #stats_pkghour {
+#stats_load, #stats_swapinfo, #stats_elapsed, #stats_pkghour, #stats_impulse {
 	background-color: #D8D8D8;
 }
 
@@ -159,14 +159,14 @@ th, td { border: 1px solid black; }
 	width: 16.66%;
 }
 #stress table {
-	width: 342px;
+	width: 428px;
 	border: 0;
-	margin: 2px 94px;
+	margin: 2px 52px;
 	border-collapse: separate;
 	border-spacing: 2px;
 }
 #stress td {
-	width: 25%;
+	width: 20%;
 }
 #progress {
 	left: 516px;
