@@ -2933,7 +2933,10 @@ build_repo() {
 				/tmp/repo.key
 			rm -f ${MASTERMNT}/tmp/repo.key
 		else
-			injail /poudriere/pkg-static repo /packages
+			# XXX SIGNING command should most of the time need network access
+			jstop
+			jstart 1
+			injail /poudriere/pkg-static repo /packages ${SIGNING_COMMAND:+signing_command: ${SIGNING_COMMAND}}
 		fi
 	else
 		msg "Preparing INDEX"
