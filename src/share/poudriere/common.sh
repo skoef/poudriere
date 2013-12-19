@@ -989,8 +989,8 @@ check_leftovers() {
 			    -p ${mnt}
 		else
 			markfs poststage ${mnt} ${stagedir}
-			mtree -f ${mnt}/poudriere/mtree.poststage \
-			    -e -p ${mnt}
+			injail mtree -f /poudriere/mtree.poststage \
+			    -e -L -p /
 		fi
 	} | while read l ; do
 		case ${l} in
@@ -1146,7 +1146,8 @@ gather_distfiles() {
 	return 0
 }
 
-# Build+test port and return on first failure
+# Build+test port and return 1 on first failure
+# Return 2 on test failure if PORTTESTING_FATAL=no
 _real_build_port() {
 	[ $# -ne 1 ] && eargs portdir
 	local portdir=$1
@@ -1158,15 +1159,15 @@ _real_build_port() {
 	local pkgenv
 	local no_stage=$(injail make -C ${portdir} -VNO_STAGE)
 	local modstamp=$(stat -f "%m" ${MASTERMNT}/poudriere/building/${PKGNAME})
-	local targets install_order build_fs_violation_check_target
+	local targets install_order
 	local stagedir plistsub_sed
 	local jailuser
+	local testfailure=0
 
 	# Must install run-depends as 'actual-package-depends' and autodeps
 	# only consider installed packages as dependencies
 	if [ -n "${no_stage}" ]; then
 		install_order="run-depends install-mtree install package"
-		build_fs_violation_check_target="run-depends"
 	else
 		jailuser=root
 		if [ "${BUILD_AS_NON_ROOT}" = "yes" ] &&
@@ -1175,7 +1176,6 @@ _real_build_port() {
 			chown -R ${jailuser} ${mnt}/wrkdirs
 		fi
 		install_order="run-depends stage package install-mtree install"
-		build_fs_violation_check_target="run-depends"
 		stagedir=$(injail make -C ${portdir} -VSTAGEDIR)
 	fi
 	targets="check-config pkg-depends fetch-depends fetch checksum \
@@ -1197,18 +1197,22 @@ _real_build_port() {
 			;;
 		extract)
 			;;
-		*-depends|install-mtree)
-			;;
 		configure) [ -n "${PORTTESTING}" ] && markfs prebuild ${mnt} ;;
-		${build_fs_violation_check_target})
+		run-depends)
+			JUSER=root
 			if [ -n "${PORTTESTING}" ]; then
 				check_fs_violation ${mnt} prebuild "${port}" \
 				    "Checking for filesystem violations" \
 				    "Filesystem touched during build:" \
 				    "build_fs_violation" "${modstamp}" ||
-				    return 1
+				if [ "${PORTTESTING_FATAL}" != "no" ]; then
+					return 1
+				else
+					testfailure=2
+				fi
 			fi
 			;;
+		*-depends|install-mtree) JUSER=root ;;
 		stage) [ -n "${PORTTESTING}" ] && markfs prestage ${mnt} ;;
 		install)
 			[ -n "${PORTTESTING}" ] && markfs preinst ${mnt}
@@ -1219,8 +1223,11 @@ _real_build_port() {
 				check_fs_violation ${mnt} prestage "${port}" \
 				    "Checking for staging violations" \
 				    "Filesystem touched during stage (files must install to \${STAGEDIR}):" \
-				    "stage_fs_violation" "${modstamp}" || 
-				    return 1
+				    "stage_fs_violation" "${modstamp}" || if [ "${PORTTESTING_FATAL}" != "no" ]; then
+					return 1
+				else
+					testfailure=2
+				fi
 			fi
 			;;
 		deinstall)
@@ -1293,7 +1300,12 @@ _real_build_port() {
 may show failures if the port does not respect PREFIX. \
 Try testport with -n to use PREFIX=LOCALBASE"
 				rm -f ${orphans}
-				[ $die -eq 0 ] || return 1
+				[ $die -eq 0 ] || if [ "${PORTTESTING_FATAL}" != "no" ]; then
+					return 1
+				else
+					testfailure=2
+					die=0
+				fi
 
 				msg "Checking for absolute symlinks into staging directory"
 				bset ${MY_JOBID} status "stage_symlinks:${port}:${modstamp}"
@@ -1470,7 +1482,11 @@ Try testport with -n to use PREFIX=LOCALBASE"
 may show failures if the port does not respect PREFIX. \
 Try testport with -n to use PREFIX=LOCALBASE"
 			rm -f ${add} ${add1} ${del} ${del1} ${mod} ${mod1}
-			[ $die -eq 0 ] || return 1
+			[ $die -eq 0 ] || if [ "${PORTTESTING_FATAL}" != "no" ]; then
+				return 1
+			else
+				testfailure=2
+			fi
 		fi
 	done
 
@@ -1484,7 +1500,7 @@ Try testport with -n to use PREFIX=LOCALBASE"
 	fi
 
 	bset ${MY_JOBID} status "idle::"
-	return 0
+	return ${testfailure}
 }
 
 # Wrapper to ensure any other cleanup needed
@@ -1829,6 +1845,7 @@ build_pkg() {
 	local log=$(log_path)
 	local ignore
 	local errortype
+	local ret=0
 	local modstamp=$(stat -f "%m" ${MASTERMNT}/poudriere/building/${pkgname})
 
 	trap '' SIGTSTP
@@ -1876,10 +1893,17 @@ build_pkg() {
 			IGNORED_REASON="${ignore}"
 	else
 		injail make -C ${portdir} clean
-		if ! build_port ${portdir}; then
+		build_port ${portdir} || ret=$?
+		if [ ${ret} -ne 0 ]; then
 			build_failed=1
-			failed_status=$(bget ${MY_JOBID} status)
-			failed_phase=${failed_status%%:*}
+			if [ ${ret} -eq 2 ]; then
+				failed_phase=$(${SCRIPTPREFIX}/processonelog2.sh \
+					${log}/logs/${PKGNAME}.log \
+					2> /dev/null)
+			else
+				failed_status=$(bget ${MY_JOBID} status)
+				failed_phase=${failed_status%%:*}
+			fi
 
 			save_wrkdir ${mnt} "${port}" "${portdir}" "${failed_phase}" || :
 		elif [ -f ${mnt}/${portdir}/.keep ]; then
@@ -1910,7 +1934,11 @@ build_pkg() {
 				PKGNAME="${PKGNAME}" \
 				FAIL_PHASE="${failed_phase}" \
 				FAIL_LOG="${log}/logs/errors/${PKGNAME}.log"
-			clean_rdepends=1
+			if [ ${ret} -eq 2 ]; then
+				clean_rdepends=0
+			else
+				clean_rdepends=1
+			fi
 		fi
 	fi
 
@@ -2784,11 +2812,14 @@ prepare_ports() {
 	if [ $SKIPSANITY -eq 0 ]; then
 		msg "Sanity checking the repository"
 
-		pkg="${PACKAGES}/All/repo.txz"
-		if [ -f "${pkg}" ]; then
-			msg "Removing invalid pkg repo file: ${pkg}"
-			rm -f "${pkg}"
-		fi
+		for n in repo.txz digests.txz packagesite.txz; do
+			pkg="${PACKAGES}/All/${n}"
+			if [ -f "${pkg}" ]; then
+				msg "Removing invalid pkg repo file: ${pkg}"
+				rm -f "${pkg}"
+			fi
+
+		done
 
 		delete_stale_pkg_cache
 
@@ -2922,22 +2953,22 @@ build_repo() {
 		msg "Creating pkgng repository"
 		bset status "pkgrepo:"
 		ensure_pkg_installed
-		rm -f ${PACKAGES}/repo.txz \
-			${PACKAGES}/repo.sqlite
+		mkdir -p ${MASTERMNT}/tmp/packages
 		if [ -f "${PKG_REPO_SIGNING_KEY:-/nonexistent}" ]; then
 			install -m 0400 ${PKG_REPO_SIGNING_KEY} \
 				${MASTERMNT}/tmp/repo.key
-			### XXX: Update pkg-repo to support -o
-			### so that /packages can remain RO
-			injail /poudriere/pkg-static repo /packages \
-				/tmp/repo.key
+			injail /poudriere/pkg-static repo -o /tmp/packages \
+				/packages /tmp/repo.key
 			rm -f ${MASTERMNT}/tmp/repo.key
 		else
 			# XXX SIGNING command should most of the time need network access
 			jstop
 			jstart 1
-			injail /poudriere/pkg-static repo /packages ${SIGNING_COMMAND:+signing_command: ${SIGNING_COMMAND}}
+			injail /poudriere/pkg-static repo -o /tmp/packages \
+			    /packages \
+			    ${SIGNING_COMMAND:+signing_command: ${SIGNING_COMMAND}}
 		fi
+		cp ${MASTERMNT}/tmp/packages/* ${PACKAGES}/
 	else
 		msg "Preparing INDEX"
 		bset status "index:"
@@ -3142,7 +3173,9 @@ esac
 : ${CLEAN:=0}
 : ${CLEAN_LISTED:=0}
 : ${VERBOSE:=0}
+: ${PORTTESTING_FATAL:=yes}
 : ${PORTTESTING_RECURSIVE:=0}
+: ${RESTRICT_NETWORKING:=yes}
 
 # Be sure to update poudriere.conf to document the default when changing these
 : ${MAX_EXECUTION_TIME:=86400}         # 24 hours for 1 command
@@ -3151,6 +3184,7 @@ esac
 : ${ATOMIC_PACKAGE_REPOSITORY:=no}
 : ${KEEP_OLD_PACKAGES:=no}
 : ${KEEP_OLD_PACKAGES_COUNT:=5}
+: ${COMMIT_PACKAGES_ON_FAILURE:=yes}
 : ${SAVE_WRKDIR:=no}
 : ${TRACK_BUILDTIMES:=no}
 : ${CHECK_CHANGED_DEPS:=yes}

@@ -21,6 +21,7 @@ FILES=		bulk.sh \
 		ports.sh \
 		pkgclean.sh \
 		processonelog.sh \
+		processonelog2.sh \
 		queue.sh \
 		status.sh \
 		testport.sh

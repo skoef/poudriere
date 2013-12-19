@@ -168,3 +168,9 @@ DPORTS_URL=git://github.com/jrmarino/DPorts.git
 # How many old package repositories to keep with KEEP_OLD_PACKAGES
 # Default: 5
 #KEEP_OLD_PACKAGES_COUNT=5
+
+# Make testing errors fatal.
+# If set to 'no', ports with test failure will be marked as failed but still
+# packaged to permit testing dependent ports (useful for bulk -t -a)
+# Default: yes
+#PORTTESTING_FATAL=yes
