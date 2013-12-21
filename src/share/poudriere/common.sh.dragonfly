@@ -314,7 +314,7 @@ create_slave() {
 	mount_tmpfs -s 12G   tmfps ${mnt}/wrkdirs
 	mount_tmpfs -s 12M   tmpfs ${mnt}/etc
 	mount_tmpfs -s 200M  tmpfs ${mnt}/var
-	mount_tmpfs -s 6G    tmpfs ${mnt}/usr/local
+	mount_tmpfs -s 12G   tmpfs ${mnt}/usr/local
 	if [ "${LESS_SANDBOXING}" = "no" ]; then
 		mount_tmpfs -s 2G    tmpfs ${mnt}/portdistfiles
 		mount_tmpfs -s 1500M tmpfs ${mnt}/new_packages
