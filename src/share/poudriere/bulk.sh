@@ -49,7 +49,9 @@ Options:
     -T          -- Try to build broken ports anyway
     -F          -- Only fetch from original master_site (skip FreeBSD mirrors)
     -s          -- Skip sanity checks
-    -J n        -- Run n jobs in parallel (Defaults to the number of CPUs)
+    -J n[:p]    -- Run n jobs in parallel, and optionally run a different
+                   number of jobs in parallel while preparing the build.
+                   (Defaults to the number of CPUs)
     -j name     -- Run only on the given jail
     -N          -- Build package repository when build is complete
     -p tree     -- Specify on which ports tree the bulk build will be done
@@ -113,7 +115,8 @@ while getopts "B:f:j:J:CcnNp:RFtrTsvwz:a" FLAG; do
 			JAILNAME=${OPTARG}
 			;;
 		J)
-			PARALLEL_JOBS=${OPTARG}
+			BUILD_PARALLEL_JOBS=${OPTARG%:*}
+			PREPARE_PARALLEL_JOBS=${OPTARG#*:}
 			;;
 		N)
 			BUILD_REPO=1
@@ -150,6 +153,11 @@ done
 
 shift $((OPTIND-1))
 
+check_jobs
+: ${BUILD_PARALLEL_JOBS:=${PARALLEL_JOBS}}
+: ${PREPARE_PARALLEL_JOBS:=${PARALLEL_JOBS}}
+PARALLEL_JOBS=${PREPARE_PARALLEL_JOBS}
+
 test -z "${JAILNAME}" && err 1 "Don't know on which jail to run please specify -j"
 
 MASTERNAME=${JAILNAME}-${PTNAME}${SETNAME:+-${SETNAME}}
@@ -158,8 +166,6 @@ MASTERMNT=${POUDRIERE_DATA}/build/${MASTERNAME}/ref
 export MASTERNAME
 export MASTERMNT
 export POUDRIERE_BUILD_TYPE=bulk
-
-check_jobs
 
 read_packages_from_params "$@"
 
@@ -205,6 +211,8 @@ if [ ${DRY_RUN} -eq 1 ]; then
 	cleanup
 	exit 0
 fi
+
+PARALLEL_JOBS=${BUILD_PARALLEL_JOBS}
 
 bset status "building:"
 

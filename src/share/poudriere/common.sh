@@ -42,8 +42,80 @@ was_a_jail_run() {
 _wait() {
 	# Workaround 'wait' builtin possibly returning early due to signals
 	# by using 'pwait' to wait(2) and then 'wait' to collect return code
+	local ret=0 pid
+
 	pwait "$@" 2>/dev/null || :
-	wait "$@"
+	for pid in "$@"; do
+		wait ${pid} || ret=$?
+	done
+
+	return ${ret}
+}
+
+kill_and_wait() {
+	[ $# -eq 2 ] || eargs time pids
+	local time="$1"
+	local pids="$2"
+	local ret=0
+	local pid
+	local found_pid
+	local retry
+
+	[ -z "${pids}" ] && return 0
+
+	# Give children $time seconds to exit and then force kill
+	retry=${time}
+	kill ${pids} 2>/dev/null || :
+
+	while [ ${retry} -gt 0 ]; do
+		found_pid=0
+		for pid in ${pids}; do
+			if ! kill -0 ${pid} 2>/dev/null; then
+				sleep 1
+				found_pid=1
+				break
+			fi
+		done
+		retry=$((retry - 1))
+		[ ${found_pid} -eq 0 ] && retry=0
+	done
+
+	# Kill all children instead of waiting on them
+	[ ${found_pid} -eq 1 ] && kill -9 ${pids} 2>/dev/null || :
+
+	_wait ${pids} || ret=$?
+
+	return ${ret}
+}
+
+# Based on Shell Scripting Recipes - Chris F.A. Johnson (c) 2005
+# Replace a pattern without needing a subshell/exec
+_gsub() {
+	[ $# -ne 3 ] && eargs string pattern replacement
+	local string="$1"
+	local pattern="$2"
+	local replacement="$3"
+	local result_l= result_r="${string}"
+
+	while :; do
+		case ${result_r} in
+			*${pattern}*)
+				result_l=${result_l}${result_r%%${pattern}*}${replacement}
+				result_r=${result_r#*${pattern}}
+				;;
+			*)
+				break
+				;;
+		esac
+	done
+
+	_gsub="${result_l}${result_r}"
+}
+
+
+gsub() {
+	_gsub "$@"
+	echo "${_gsub}"
 }
 
 not_for_os() {
@@ -672,6 +744,28 @@ EOF
 	echo " done"
 }
 
+mnt_tmpfs() {
+	[ $# -lt 2 ] && eargs type dst
+	local type="$1"
+	local dst="$2"
+	local limit size
+
+	case ${type} in
+		data)
+			# Limit data to 1GiB
+			limit=1
+			;;
+
+		*)
+			limit=${TMPFS_LIMIT}
+			;;
+	esac
+
+	[ -n "${limit}" ] && size="-o size=${limit}G"
+
+	mount_tmpfs ${size} tmpfs "${dst}"
+}
+
 rm() {
 	local arg
 
@@ -724,7 +818,7 @@ do_portbuild_mounts() {
 	[ -d "${CCACHE_DIR:-/nonexistent}" ] &&
 		${NULLMOUNT} ${CCACHE_DIR} ${mnt}/root/.ccache
 	[ -n "${MFSSIZE}" ] && mdmfs -t -S -o async -s ${MFSSIZE} md ${mnt}/wrkdirs
-	[ ${TMPFS_WRKDIR} -eq 1 ] && mount -t tmpfs tmpfs ${mnt}/wrkdirs
+	[ ${TMPFS_WRKDIR} -eq 1 ] && mnt_tmpfs wrkdir ${mnt}/wrkdirs
 	# Only show mounting messages once, not for every builder
 	if [ ${mnt##*/} = "ref" ]; then
 		[ -d "${CCACHE_DIR}" ] &&
@@ -860,10 +954,8 @@ commit_packages() {
 
 	# Look for broken top-level links and remove them, if they reference
 	# the old directory
-	find ${PACKAGES_ROOT}/ -mindepth 1 -maxdepth 1 ! -name '.*' -type l |
+	find -L ${PACKAGES_ROOT}/ -mindepth 1 -maxdepth 1 ! -name '.*' -type l |
 	    while read path; do
-		# Skip if not a broken link
-		[ ! -e "${path}" ] || continue
 		link=$(readlink ${path})
 		# Skip if link does not reference inside latest
 		[ "${link##.latest}" != "${link}" ] || continue
@@ -875,7 +967,7 @@ commit_packages() {
 
 	if [ "${KEEP_OLD_PACKAGES}" = "yes" ]; then
 		keep_cnt=$((${KEEP_OLD_PACKAGES_COUNT} + 1))
-		find ${PACKAGES_ROOT} -type d -mindepth 1 -maxdepth 1 \
+		find ${PACKAGES_ROOT}/ -type d -mindepth 1 -maxdepth 1 \
 		    -name '.real_*' | sort -Vr |
 		    sed -n "${keep_cnt},\$p" |
 		    xargs rm -rf 2>/dev/null || :
@@ -888,8 +980,8 @@ commit_packages() {
 load_blacklist() {
 	[ $# -lt 2 ] && eargs name ptname setname
 	local name=$1
-	local ptname=$3
-	local setname=$4
+	local ptname=$2
+	local setname=$3
 	local bl b bfile
 
 	bl="- ${setname} ${ptname} ${name} ${name}-${ptname}"
@@ -1163,6 +1255,7 @@ _real_build_port() {
 	local stagedir plistsub_sed
 	local jailuser
 	local testfailure=0
+	local max_execution_time
 
 	# Must install run-depends as 'actual-package-depends' and autodeps
 	# only consider installed packages as dependencies
@@ -1190,6 +1283,7 @@ _real_build_port() {
 	[ -z "${PORTTESTING}" ] && PORT_FLAGS="${PORT_FLAGS} NO_DEPENDS=yes"
 
 	for phase in ${targets}; do
+		max_execution_time=${MAX_EXECUTION_TIME}
 		bset ${MY_JOBID} status "${phase}:${port}:${modstamp}"
 		job_msg_verbose "Status   ${port}: ${phase}"
 		case ${phase} in
@@ -1212,12 +1306,14 @@ _real_build_port() {
 				fi
 			fi
 			;;
-		*-depends|install-mtree) JUSER=root ;;
+		checksum|*-depends|install-mtree) JUSER=root ;;
 		stage) [ -n "${PORTTESTING}" ] && markfs prestage ${mnt} ;;
 		install)
+			max_execution_time=3600
 			[ -n "${PORTTESTING}" ] && markfs preinst ${mnt}
 			;;
 		package)
+			max_execution_time=3600
 			if [ -n "${PORTTESTING}" ] &&
 			    [ -z "${no_stage}" ]; then
 				check_fs_violation ${mnt} prestage "${port}" \
@@ -1231,6 +1327,7 @@ _real_build_port() {
 			fi
 			;;
 		deinstall)
+			max_execution_time=3600
 			# Skip for all linux ports, they are not safe
 			if [ "${PKGNAME%%*linux*}" != "" ]; then
 				msg "Checking shared library dependencies"
@@ -1340,7 +1437,7 @@ Try testport with -n to use PREFIX=LOCALBASE"
 				pkgenv=
 			fi
 
-			nohang ${MAX_EXECUTION_TIME} ${NOHANG_TIME} \
+			nohang ${max_execution_time} ${NOHANG_TIME} \
 				${log}/logs/${PKGNAME}.log \
 				injail env ${pkgenv} ${PORT_FLAGS} \
 				make -C ${portdir} ${phase}
@@ -1384,6 +1481,14 @@ Try testport with -n to use PREFIX=LOCALBASE"
 			local mod=$(mktemp ${mnt}/tmp/mod.XXXXXX)
 			local mod1=$(mktemp ${mnt}/tmp/mod1.XXXXXX)
 			local die=0
+			local users user homedirs
+
+			users=$(injail make -C ${portdir} -VUSERS)
+			homedirs=""
+			for user in ${users}; do
+				user=$(grep ^${user}: ${mnt}/usr/ports/UIDs | cut -f 9 -d : | sed -e "s|/usr/local|${PREFIX}| ; s|^|${mnt}|")
+				homedirs="${homedirs} ${user}"
+			done
 
 			check_leftovers ${mnt} | \
 				while read modtype path; do
@@ -1405,6 +1510,12 @@ Try testport with -n to use PREFIX=LOCALBASE"
 				fi
 				case $modtype in
 				+)
+					if [ -d "${path}" ]; then
+						# home directory of users created
+						case " ${homedirs} " in
+						*\ ${path}\ *) continue;;
+						esac
+					fi
 					case "${ppath}" in
 					# gconftool-2 --makefile-uninstall-rule is unpredictable
 					etc/gconf/gconf.xml.defaults/%gconf-tree*.xml) ;;
@@ -1577,13 +1688,23 @@ $(find ${MASTERMNT}/poudriere/building ${MASTERMNT}/poudriere/pool ${MASTERMNT}/
 }
 
 queue_empty() {
-	local pool_dir
-	dirempty ${MASTERMNT}/poudriere/deps || return 1
+	local pool_dir lock dirs
 
-	for pool_dir in ${POOL_BUCKET_DIRS}; do
-		dirempty ${pool_dir} || return 1
+	# Lock on balance_pool to avoid race here while it is moving between
+	# /unbalanced and a balanced slot
+	lock=${MASTERMNT}/poudriere/.lock-balance_pool
+	mkdir ${lock} 2>/dev/null || return 1
+
+	dirs="${MASTERMNT}/poudriere/deps ${MASTERMNT}/poudriere/pool/unbalanced ${POOL_BUCKET_DIRS}"
+
+	for pool_dir in ${dirs}; do
+		if ! dirempty ${pool_dir}; then
+			rmdir ${lock}
+			return 1
+		fi
 	done
 
+	rmdir ${lock}
 	return 0
 }
 
@@ -1849,6 +1970,7 @@ build_pkg() {
 	local modstamp=$(stat -f "%m" ${MASTERMNT}/poudriere/building/${pkgname})
 
 	trap '' SIGTSTP
+	[ -n "${MAX_MEMORY}" ] && ulimit -m $((${MAX_MEMORY} * 1024 * 1024))
 
 	export PKGNAME="${pkgname}" # set ASAP so cleanup() can use it
 	cache_get_origin port "${pkgname}"
@@ -1860,7 +1982,7 @@ build_pkg() {
 
 	if [ ${TMPFS_LOCALBASE} -eq 1 -o ${TMPFS_ALL} -eq 1 ]; then
 		umount -f ${mnt}/${LOCALBASE:-/usr/local} 2>/dev/null || :
-		mount -t tmpfs tmpfs ${mnt}/${LOCALBASE:-/usr/local}
+		mnt_tmpfs localbase ${mnt}/${LOCALBASE:-/usr/local}
 	fi
 
 	case " ${BLACKLIST} " in
@@ -2034,6 +2156,7 @@ pkg_get_origin() {
 	local _origin=$3
 	local pkg_cache_dir
 	local originfile
+	local new_origin
 
 	get_pkg_cache_dir pkg_cache_dir "${pkg}"
 	originfile="${pkg_cache_dir}/origin"
@@ -2053,6 +2176,8 @@ pkg_get_origin() {
 		read _origin < "${originfile}"
 	fi
 
+	check_moved new_origin ${_origin} && _origin=${new_origin}
+
 	setvar "${var_return}" "${_origin}"
 }
 
@@ -2063,6 +2188,7 @@ pkg_get_dep_origin() {
 	local dep_origin_file
 	local pkg_cache_dir
 	local compiled_dep_origins
+	local origin new_origin _old_dep_origins
 
 	get_pkg_cache_dir pkg_cache_dir "${pkg}"
 	dep_origin_file="${pkg_cache_dir}/dep_origin"
@@ -2076,13 +2202,22 @@ pkg_get_dep_origin() {
 				"/packages/All/${pkg##*/}" '%do' | tr '\n' ' ')
 		fi
 		echo "${compiled_dep_origins}" > "${dep_origin_file}"
-		setvar "${var_return}" "${compiled_dep_origins}"
-		return 0
+	else
+		while read line; do
+			compiled_dep_origins="${deps} ${line}"
+		done < "${dep_origin_file}"
 	fi
 
-	while read line; do
-		compiled_dep_origins="${deps} ${line}"
-	done < "${dep_origin_file}"
+	# Check MOVED
+	_old_dep_origins="${compiled_dep_origins}"
+	compiled_dep_origins=
+	for origin in ${_old_dep_origins}; do
+		if check_moved new_origin "${origin}"; then
+			compiled_dep_origins="${compiled_dep_origins} ${new_origin}"
+		else
+			compiled_dep_origins="${compiled_dep_origins} ${origin}"
+		fi
+	done
 
 	setvar "${var_return}" "${compiled_dep_origins}"
 }
@@ -2164,16 +2299,20 @@ get_cache_dir() {
 # @param var_return The variable to set the result in
 # @param string pkg $PKGDIR/All/PKGNAME.PKG_EXT
 get_pkg_cache_dir() {
-	[ $# -ne 2 ] && eargs var_return pkg
+	[ $# -lt 2 ] && eargs var_return pkg
 	local var_return="$1"
 	local pkg="$2"
+	local use_mtime="${3:-1}"
 	local pkg_file="${pkg##*/}"
 	local pkg_dir
 	local cache_dir
+	local pkg_mtime
 
 	get_cache_dir cache_dir
 
-	pkg_dir="${cache_dir}/${pkg_file}"
+	[ ${use_mtime} -eq 1 ] && pkg_mtime=$(stat -f %m "${pkg}")
+
+	pkg_dir="${cache_dir}/${pkg_file}/${pkg_mtime}"
 
 	[ -d "${pkg_dir}" ] || mkdir -p "${pkg_dir}"
 
@@ -2185,7 +2324,7 @@ clear_pkg_cache() {
 	local pkg="$1"
 	local pkg_cache_dir
 
-	get_pkg_cache_dir pkg_cache_dir "${pkg}"
+	get_pkg_cache_dir pkg_cache_dir "${pkg}" 0
 
 	rm -fr "${pkg_cache_dir}"
 }
@@ -2582,11 +2721,13 @@ parallel_start() {
 # list.
 _reap_children() {
 	local pid
+	local ret=0
+
 	for pid in ${PARALLEL_PIDS}; do
 		# Check if this pid is still alive
 		if ! kill -0 ${pid} 2>/dev/null; then
 			# This will error out if the return status is non-zero
-			_wait ${pid}
+			_wait ${pid} || ret=$?
 			# Remove pid from PARALLEL_PIDS and strip away all
 			# spaces
 			PARALLEL_PIDS_L=${PARALLEL_PIDS%% ${pid} *}
@@ -2598,51 +2739,54 @@ _reap_children() {
 			PARALLEL_PIDS=" ${PARALLEL_PIDS_L} ${PARALLEL_PIDS_R} "
 		fi
 	done
+
+	return ${ret}
 }
 
 # Wait on all remaining running processes and clean them up. Error out if
 # any have non-zero return status.
 parallel_stop() {
-	pwait ${PARALLEL_PIDS} 2>/dev/null || :
-	for pid in ${PARALLEL_PIDS}; do
-		# This will read the return code of each child
-		# and properly error out if the children errored
-		wait ${pid}
-	done
+	local ret=0
+	local do_wait="${1:-1}"
+
+	if [ ${do_wait} -eq 1 ]; then
+		_wait ${PARALLEL_PIDS} || ret=$?
+	fi
 
 	exec 6<&-
 	exec 6>&-
 	unset PARALLEL_PIDS
 	unset NBPARALLEL
+
+	return ${ret}
 }
 
 parallel_shutdown() {
-	# Kill all children instead of waiting on them
-	if [ -n "${PARALLEL_PIDS}" ]; then
-		for mypid in ${PARALLEL_PIDS}; do
-			killtree ${mypid} 9 || :
-		done
-	fi
-	parallel_stop 2>/dev/null || :
+	kill_and_wait 30 "${PARALLEL_PIDS}" 2>/dev/null || :
+	# Reap the pids
+	parallel_stop 0 2>/dev/null || :
 }
 
 parallel_run() {
 	local cmd="$1"
 	shift 1
 
-	if [ ${NBPARALLEL} -eq ${PARALLEL_JOBS} ]; then
-		unset a; until trappedinfo=; read a <&6 || [ -z "$trappedinfo" ]; do :; done
-	fi
-	[ ${NBPARALLEL} -lt ${PARALLEL_JOBS} ] && NBPARALLEL=$((NBPARALLEL + 1))
 	# Occasionally reap dead children. Don't do this too often or it
 	# becomes a bottleneck. Do it too infrequently and there is a risk
 	# of PID reuse/collision
 	_SHOULD_REAP=$((_SHOULD_REAP + 1))
 	if [ ${_SHOULD_REAP} -eq 16 ]; then
-		_reap_children
 		_SHOULD_REAP=0
+		_reap_children || return $?
 	fi
 
+	# Only read once all slots are taken up; burst jobs until maxed out.
+	# NBPARALLEL is never decreased and only inreased until maxed.
+	if [ ${NBPARALLEL} -eq ${PARALLEL_JOBS} ]; then
+		unset a; until trappedinfo=; read a <&6 || [ -z "$trappedinfo" ]; do :; done
+	fi
+
+	[ ${NBPARALLEL} -lt ${PARALLEL_JOBS} ] && NBPARALLEL=$((NBPARALLEL + 1))
 	PARALLEL_CHILD=1 parallel_exec $cmd "$@" &
 	PARALLEL_PIDS="${PARALLEL_PIDS} $! "
 }
@@ -2676,15 +2820,46 @@ delete_stale_symlinks_and_empty_dirs() {
 		-empty -delete
 }
 
+load_moved() {
+	msg "Loading MOVED"
+	bset status "loading_moved:"
+	mkdir ${MASTERMNT}/poudriere/MOVED
+	grep -v '^#' ${MASTERMNT}/usr/ports/MOVED | awk \
+	    -F\| '
+		$2 != "" {
+			sub("/", "_", $1);
+			print $1,$2;
+		}' | while read old_origin new_origin; do
+			echo ${new_origin} > \
+			    ${MASTERMNT}/poudriere/MOVED/${old_origin}
+		done
+}
+
+check_moved() {
+	[ $# -lt 2 ] && eargs var_return origin
+	local var_return="$1"
+	local origin="$2"
+	local _new_origin
+
+	_gsub ${origin} "/" "_"
+	[ -f "${MASTERMNT}/poudriere/MOVED/${_gsub}" ] &&
+	    read _new_origin < "${MASTERMNT}/poudriere/MOVED/${_gsub}"
+
+	setvar "${var_return}" "${_new_origin}"
+
+	# Return 0 if blank
+	[ -n "${_new_origin}" ]
+}
+
+
 prepare_ports() {
 	local pkg
 	local log=$(log_path)
 	local n port pn nbq resuming_build
 	local cache_dir
 
-	msg "Calculating ports order and dependencies"
 	mkdir -p "${MASTERMNT}/poudriere"
-	[ ${TMPFS_DATA} -eq 1 -o ${TMPFS_ALL} -eq 1 ] && mount -t tmpfs tmpfs "${MASTERMNT}/poudriere"
+	[ ${TMPFS_DATA} -eq 1 -o ${TMPFS_ALL} -eq 1 ] && mnt_tmpfs data "${MASTERMNT}/poudriere"
 	rm -rf "${MASTERMNT}/poudriere/var/cache/origin-pkgname" \
 		"${MASTERMNT}/poudriere/var/cache/pkgname-origin" 2>/dev/null || :
 	mkdir -p "${MASTERMNT}/poudriere/building" \
@@ -2703,9 +2878,7 @@ prepare_ports() {
 			POOL_BUCKET_DIRS="${POOL_BUCKET_DIRS} ${MASTERMNT}/poudriere/pool/${n}"
 		done
 	fi
-	# Add unbalanced at the end
-	POOL_BUCKET_DIRS="${POOL_BUCKET_DIRS} ${MASTERMNT}/poudriere/pool/unbalanced"
-	mkdir -p ${POOL_BUCKET_DIRS}
+	mkdir -p ${POOL_BUCKET_DIRS} ${MASTERMNT}/poudriere/pool/unbalanced
 
 	if was_a_bulk_run; then
 		get_cache_dir cache_dir
@@ -2729,9 +2902,12 @@ prepare_ports() {
 		bset setname "${SETNAME}"
 		bset ptname "${PTNAME}"
 		bset buildname "${BUILDNAME}"
-
-		bset status "computingdeps:"
 	fi
+
+	load_moved
+
+	msg "Calculating ports order and dependencies"
+	bset status "computingdeps:"
 
 	:> "${MASTERMNT}/poudriere/port_deps.unsorted"
 	parallel_start
@@ -2762,7 +2938,7 @@ prepare_ports() {
 				cache_get_pkgname pkgname "${port}"
 				pkg="${PACKAGES}/All/${pkgname}.${PKG_EXT}"
 				if [ -f "${pkg}" ]; then
-					msg "Deleting existing package: ${pkg##*/}"
+					msg "(-C) Deleting existing package: ${pkg##*/}"
 					delete_pkg "${pkg}"
 				fi
 			done
@@ -3191,6 +3367,6 @@ esac
 : ${CHECK_CHANGED_OPTIONS:=verbose}
 : ${NO_RESTRICTED:=no}
 
-BUILDNAME=$(date +%Y%m%d_%H%M%S)
+: ${BUILDNAME:=$(date +%Y%m%d_%H%M%S)}
 
 [ -d ${WATCHDIR} ] || mkdir -p ${WATCHDIR}

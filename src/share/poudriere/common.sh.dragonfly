@@ -280,7 +280,7 @@ cleanup() {
 		for pid in ${MASTERMNT}/poudriere/var/run/*.pid; do
 			# Ensure there is a pidfile to read or break
 			[ "${pid}" = "${MASTERMNT}/poudriere/var/run/*.pid" ] && break
-			killtree `cat ${pid}` 9 || :
+				pkill -15 -F ${pid} >/dev/null 2>&1 || :
 		done
 	fi
 	wait
