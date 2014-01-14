@@ -84,7 +84,8 @@ jail_start() {
 			${MASTERMNT}/new_packages/Latest \
 			${MASTERMNT}/packages \
 			${MASTERMNT}/portdistfiles \
-			${MASTERMNT}/usr/local
+			${MASTERMNT}/usr/local \
+			${MASTERMNT}/var/db/ports
 
 	if [ -d "${CCACHE_DIR:-/nonexistent}" ]; then
 		mkdir ${MASTERMNT}/root/.ccache
