@@ -69,11 +69,9 @@ During the build, hit ^T to send
 .Dv SIGINFO
 and get stats and progress back.
 .It jail
-This command gives you control to manage the jails used by
+This command allows you to manage the jails used by
 .Nm
-to provide building environment (different
-.Dx versions, different
-architectures).
+which are building environments differing by OS version and architecture.
 .It combo
 This command works on jail-port build combinations.  The options are
 kept out of bulk to avoid damage by a command to a running bulk build.
@@ -695,7 +693,7 @@ command must be used on a DragonFly 3.6 or later.
 .Sh BUGS
 In case of bugs, feel free to fill
 .Pp
-.Lk http://github.com/jrmarino/DPorts/issues
+.Lk http://fossil.etoilebsd.net/poudriere/reportlist
 .Sh AUTHORS
 .An Baptiste Daroussin Aq bapt@FreeBSD.org
 .An Bryan Drewery Aq bdrewery@FreeBSD.org
