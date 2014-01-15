@@ -82,16 +82,17 @@ jail_start() {
 			${MASTERMNT}/distfiles \
 			${MASTERMNT}/new_packages/All \
 			${MASTERMNT}/new_packages/Latest \
+			${MASTERMNT}/options \
 			${MASTERMNT}/packages \
 			${MASTERMNT}/portdistfiles \
-			${MASTERMNT}/usr/local \
-			${MASTERMNT}/var/db/ports
+			${MASTERMNT}/usr/local
 
 	if [ -d "${CCACHE_DIR:-/nonexistent}" ]; then
 		mkdir ${MASTERMNT}/root/.ccache
 		echo "WITH_CCACHE_BUILD=yes" >> ${MASTERMNT}/etc/make.conf
 		echo "CCACHE_DIR=/root/.ccache" >> ${MASTERMNT}/etc/make.conf
 	fi
+	echo "PORT_DBDIR=/options" >> ${MASTERMNT}/etc/make.conf
 	echo "PORTSDIR=/usr/ports" >> ${MASTERMNT}/etc/make.conf
 	echo "PACKAGES=/packages" >> ${MASTERMNT}/etc/make.conf
 	echo "DISTDIR=/distfiles" >> ${MASTERMNT}/etc/make.conf

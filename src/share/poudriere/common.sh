@@ -639,6 +639,7 @@ markfs() {
 ./distfiles/*
 ./mnt
 ./new_packages/*
+./options/*
 ./packages/*
 ./portdistfiles/*
 ./poudriere/*
@@ -657,7 +658,6 @@ markfs() {
 ./usr/share/*
 ./usr/src
 ./tmp/*
-./var/db/ports/*
 ./wrkdirs/*
 EOF
 			;;
@@ -671,6 +671,7 @@ EOF
 ./etc2
 ./mnt
 ./new_packages/*
+./options/*
 ./packages/*
 ./portdistfiles/*
 ./poudriere/*
@@ -689,7 +690,6 @@ EOF
 ./usr/share/*
 ./usr/src
 ./tmp/*
-./var/db/ports/*
 ./wrkdirs/*
 EOF
 			;;
@@ -711,6 +711,7 @@ EOF
 ./etc2
 ./mnt
 ./new_packages/*
+./options/*
 ./packages/*
 ./portdistfiles/*
 ./poudriere/*
@@ -730,7 +731,6 @@ EOF
 ./usr/src
 ./tmp/*
 ./var/db/pkg/*
-./var/db/ports/*
 ./var/log/*
 ./var/mail/*
 ./var/run/*
@@ -790,8 +790,8 @@ use_options() {
 	[ -d "${optionsdir}" ] || return 1
 	optionsdir=$(realpath ${optionsdir} 2>/dev/null)
 	[ "${mnt##*/}" = "ref" ] &&
-		msg "Mounting /var/db/ports from: ${optionsdir}"
-	${NULLMOUNT} -o ro ${optionsdir} ${mnt}/var/db/ports ||
+		msg "Mounting /options from: ${optionsdir}"
+	${NULLMOUNT} -o ro ${optionsdir} ${mnt}/options ||
 		err 1 "Failed to mount OPTIONS directory"
 
 	return 0
@@ -2457,7 +2457,7 @@ delete_old_pkg() {
 		done
 	fi
 
-	# Check if the compiled options match the current options from make.conf and /var/db/ports
+	# Check if the compiled options match the current options from make.conf and /options
 	if [ "${CHECK_CHANGED_OPTIONS}" != "no" ]; then
 		current_options=$(injail make -C /usr/ports/${o} pretty-print-config | \
 			tr ' ' '\n' | sed -n 's/^\+\(.*\)/\1/p' | sort | tr '\n' ' ')
