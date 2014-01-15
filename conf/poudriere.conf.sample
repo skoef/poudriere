@@ -156,11 +156,11 @@ DPORTS_URL=git://github.com/jrmarino/DPorts.git
 #NOHANG_TIME=7200
 
 
-# The repository is updated atomically if set yes. This involves using
+# The repository is updated atomically if set yes. This leaves the
+# repository untouched until the build completes. This involves using
 # hardlinks and symlinks. The operations are fast, but can be intrusive
 # for remote syncing or backups.
-# Recommended to always keep on.
-# Default: yes
+# Default: no
 #ATOMIC_PACKAGE_REPOSITORY=yes
 
 # When using ATOMIC_PACKAGE_REPOSITORY, commit the packages if some
