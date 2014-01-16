@@ -85,6 +85,7 @@ jail_start() {
 			${MASTERMNT}/options \
 			${MASTERMNT}/packages \
 			${MASTERMNT}/portdistfiles \
+			${MASTERMNT}/poudriere \
 			${MASTERMNT}/usr/local
 
 	if [ -d "${CCACHE_DIR:-/nonexistent}" ]; then
@@ -242,8 +243,6 @@ zfs_getfs() {
 
 clonefs() {
 	echo "The clonefs function is not used in DragonFly"
-
-
 }
 
 destroyfs() {
@@ -317,6 +316,7 @@ create_slave() {
 	mount_tmpfs -s 12M   tmpfs ${mnt}/etc
 	mount_tmpfs -s 200M  tmpfs ${mnt}/var
 	mount_tmpfs -s 12G   tmpfs ${mnt}/usr/local
+	mount_tmpfs -s 40M   tmpfs ${mnt}/poudriere
 	if [ "${LESS_SANDBOXING}" = "no" ]; then
 		mount_tmpfs -s 2G    tmpfs ${mnt}/portdistfiles
 		mount_tmpfs -s 1500M tmpfs ${mnt}/new_packages
@@ -335,16 +335,19 @@ destroy_slave() {
 	local stragglers
 	local task="${1}"
 	local mnt="${MASTERMNT%/ref}/${task}"
-	local AWKCMD='{ if ($3 ~ mnt && ( \
-		$3 ~ /\/tmp/ || \
-		$3 ~ /\/wrkdirs/ || \
-		$3 ~ /\/etc/ || \
-		$3 ~ /\/var/ || \
-		$3 ~ /\/compat/ || \
-		$3 ~ /\/usr\/local/ || \
-		$3 ~ /\/portdistfiles/ || \
-		$3 ~ /\/new_packages/ \
-	)) { print $3 }}'
+	local AWKCMD='{ if ($3 ~ mnt) { \
+		len = length(mnt); \
+		rest = substr($3, len+1); \
+		if (       rest == "/etc" \
+			|| rest == "/new_packages" \
+			|| rest == "/portdistfiles" \
+			|| rest == "/poudriere" \
+			|| rest == "/tmp" \
+			|| rest == "/usr/local" \
+			|| rest == "/var" \
+			|| rest == "/wrkdirs" \
+		) print $3;
+	}}'
 
 	# make sure cwd is not on mount
 	cd /
