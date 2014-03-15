@@ -58,6 +58,7 @@ extern char **environ;
 static int kq;
 static int nbevq = 0;
 static struct kevent ke;
+int conffd = -1;
 
 struct client {
 	int fd;
@@ -787,6 +788,20 @@ main(void)
 
 	if ((pidfile_path_o = ucl_object_find_key(conf, "pidfile")) == NULL) {
 		warnx("'pidfile' not found in the configuration file");
+		ucl_object_unref(conf);
+		return (EXIT_FAILURE);
+	}
+
+	if (mkdir(PREFIX"/etc/poudriere.d", 0644) == -1) {
+		if (errno != EEXIST) {
+			warn("unable to create configuration directory");
+			ucl_object_unref(conf);
+			return (EXIT_FAILURE);
+		}
+	}
+
+	if ((conffd = open(PREFIX"/etc/poudriered", O_RDWR|O_CREAT|O_DIRECTORY)) == -1) {
+		warn("unable to open the configuration directory");
 		ucl_object_unref(conf);
 		return (EXIT_FAILURE);
 	}
