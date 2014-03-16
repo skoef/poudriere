@@ -76,7 +76,7 @@ pkglibexec_PROGRAMS= \
 		     nc \
 		     rename
 
-sbin_PROGRAMS=	poudriered
+sbin_PROGRAMS=	poudriered pdctl
 noinst_LIBRARIES=	libucl.a
 
 AUTOMAKE_OPTIONS=	subdir-objects
@@ -114,6 +114,11 @@ poudriered_CFLAGS=	-DPREFIX=\"$(prefix)\" \
 poudriered_LDADD=	libucl.a \
 			-lsbuf \
 			-lutil
+pdctl_SOURCES=		src/pdctl/pdctl.c
+pdctl_CFLAGS=		-DPREFIX=\"$(prefix)\" \
+			-I$(top_srcdir)/external/libucl/include
+pdctl_LDADD=		libucl.a \
+			-lsbuf
 
 .PHONY:	gen-make-wiki
 gen-man-wiki:
