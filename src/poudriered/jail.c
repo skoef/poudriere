@@ -32,39 +32,9 @@
 #include <dirent.h>
 #include <unistd.h>
 
-#include "jail.h"
+#include "internal.h"
 
 extern int conffd;
-
-bool
-read_line_at(int dfd, const char *fn, char **buffer, size_t *sz)
-{
-	int fd = -1;
-	struct stat st;
-
-	if ((fd = openat(dfd, fn, O_RDONLY)) == -1) {
-		return (false);
-	}
-
-	if (fstat(fd, &st) == -1) {
-		close(fd);
-		return (false);
-	}
-
-	if (*sz <= st.st_size) {
-		*sz = st.st_size + 1;
-		*buffer = reallocf(*buffer, *sz);
-	}
-
-	if (read(fd, *buffer, st.st_size) == -1) {
-		close(fd);
-		return (false);
-	}
-
-	close(fd);
-	(*buffer)[st.st_size] = '\0';
-	return (true);
-}
 
 ucl_object_t *
 jail_list(void)
@@ -136,6 +106,8 @@ jail_list(void)
 
 	if (sz > 0)
 		free(buf);
+
+	closedir(dirp);
 
 	return (jails);
 }

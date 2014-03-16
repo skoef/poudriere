@@ -51,7 +51,7 @@
 #include <ucl.h>
 #include <unistd.h>
 
-#include "jail.h"
+#include "internal.h"
 
 static ucl_object_t *conf;
 static ucl_object_t *queue = NULL;
@@ -563,6 +563,17 @@ client_exec(struct client *cl)
 				else
 					msg = ucl_object_insert_key(msg, o,
 					    "jail", 4, true);
+				send_object(cl, msg);
+			} else if (!strcmp(ucl_object_tostring(c), "ports")) {
+				ucl_object_t *msg = NULL;
+				ucl_object_t *o = ports_list();
+				if (o == NULL)
+					msg = ucl_object_insert_key(msg,
+					    ucl_object_new(),
+					    "ports", 5, true);
+				else
+					msg = ucl_object_insert_key(msg, o,
+					    "ports", 5, true);
 				send_object(cl, msg);
 			}
 		} else {

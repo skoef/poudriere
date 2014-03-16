@@ -27,3 +27,5 @@
 #include <ucl.h>
 
 ucl_object_t *jail_list(void);
+ucl_object_t *ports_list(void);
+bool read_line_at(int fd, const char *fn, char **buf, size_t *sz);
