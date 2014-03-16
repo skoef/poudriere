@@ -42,6 +42,7 @@ main(int argc, char **argv)
 	struct ucl_parser *parser = NULL;
 	ucl_object_t *conf, *sock_path_o;
 	int pdfd, ch;
+	size_t r;
 	const char *method, *uri, *data;
 	struct sbuf *header, *req;
 	char buf[BUFSIZ];
@@ -135,8 +136,8 @@ main(int argc, char **argv)
 
 	write(pdfd, sbuf_data(req), sbuf_len(req));
 
-	while (read(pdfd, buf, BUFSIZ) > 0) {
-		printf("%s", buf);
+	while ((r = read(pdfd, buf, BUFSIZ)) > 0) {
+		write(fileno(stdout), buf, r);
 	}
 	printf("\n");
 
