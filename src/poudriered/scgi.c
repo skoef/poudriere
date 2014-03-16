@@ -40,17 +40,18 @@
 
 ucl_object_t *
 scgi_parse(char *raw) {
-	int l, pos, keylen, varlen;
-	int *cnt;
+	int l;
 	const char *err = NULL;
+	const char *key;
 	char *walk;
 	ucl_object_t *scgi, *header, *o;
+	struct ucl_parser *parser = NULL;
 
 	walk = raw;
 	/* read length */
 	while (*walk && isdigit(*walk))
 		walk++;
-	walk = '\0';
+	*walk = '\0';
 
 	l = strtonum(raw, 0, INT_MAX, &err);
 	if (err != NULL)
@@ -58,36 +59,22 @@ scgi_parse(char *raw) {
 	walk++;
 	raw = walk;
 
-	pos = 0;
 	header = NULL;
 
-	while (pos <= l) {
-		if (*walk == '\0') {
-			if (varlen == 0) {
-				cnt = &varlen;
-			} else {
-				o = ucl_object_fromstring_common(raw + keylen + 1, varlen, UCL_STRING_PARSE_INT);
-				header = ucl_object_insert_key(header, o, raw, keylen, false);
-				cnt = &keylen;
-				keylen = 0;
-				varlen = 0;
-				walk++;
-				raw = walk;
-			}
-			continue;
-		}
-		(*cnt)++;
+	while (walk - raw < l) {
+		key = walk;
+		walk += strlen(walk);
+		o = ucl_object_fromstring_common(walk, strlen(walk), UCL_STRING_PARSE_INT);
+		header = ucl_object_insert_key(header, o, key, strlen(key), false);
 		walk++;
-		pos++;
 	}
+
 
 	o = ucl_object_find_key(header, "CONTENT_LENGTH");
 	if (o == NULL || o->type != UCL_INT) {
 		ucl_object_unref(header);
 		return (NULL);
 	}
-	struct ucl_parser *parser = NULL;
-	ucl_object_t *obj;
 
 	raw++;
 	parser = ucl_parser_new(0);
@@ -96,7 +83,9 @@ scgi_parse(char *raw) {
 		return (NULL);
 	}
 	scgi = ucl_object_insert_key(NULL, header, "header", 6, false);
-	scgi = ucl_object_insert_key(NULL, ucl_parser_get_object(parser), "data", 4, false);
+	scgi = ucl_object_insert_key(scgi, ucl_parser_get_object(parser), "data", 4, false);
+
+	ucl_parser_free(parser);
 
 	return (scgi);
 }
