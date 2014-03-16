@@ -91,9 +91,40 @@ scgi_parse(char *raw) {
 }
 
 void
-scgi_send(int fd, unsigned char *data)
+scgi_send(int fd, int status, unsigned char *data)
 {
-	dprintf(fd, "Status: 200 OK\r\n");
+	switch (status) {
+	case HTTP_OK:
+		dprintf(fd, "Status: 200 OK\r\n");
+		break;
+	case HTTP_CREATED:
+		dprintf(fd, "Status: 201 Created\r\n");
+		break;
+	case HTTP_ACCEPTED:
+		dprintf(fd, "Status: 202 Accepted\r\n");
+		break;
+	case HTTP_BADREQUEST:
+		dprintf(fd, "Status: 400 Bad Request\r\n");
+		break;
+	case HTTP_FORBIDDEN:
+		dprintf(fd, "Status: 403 Forbidden\r\n");
+		break;
+	case HTTP_NOTFOUND:
+		dprintf(fd, "Status: 404 Not found\r\n");
+		break;
+	case HTTP_METHODNOTALLOWED:
+		dprintf(fd, "Status: 405 Method Not Allowed\r\n");
+		break;
+	case HTTP_NOACCEPTABLE:
+		dprintf(fd, "Status: 406 Not Acceptable\r\n");
+		break;
+	case HTTP_PRECONDITIONFAILED:
+		dprintf(fd, "Status: 412 Precondition Failed\r\n");
+		break;
+	case HTTP_INTERNALERROR:
+		dprintf(fd, "Status: 500 Internal Server Error\r\n");
+		break;
+	}
 	dprintf(fd, "Content-Type: text/plain\r\n");
 	dprintf(fd, "\r\n");
 	dprintf(fd, "%s", data);

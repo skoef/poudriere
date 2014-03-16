@@ -26,8 +26,19 @@
 
 #include <ucl.h>
 
+#define HTTP_OK			200
+#define HTTP_CREATED		201
+#define HTTP_ACCEPTED		202
+#define HTTP_BADREQUEST		400
+#define HTTP_FORBIDDEN		403
+#define HTTP_NOTFOUND		404
+#define HTTP_METHODNOTALLOWED	405
+#define HTTP_NOACCEPTABLE	406
+#define HTTP_PRECONDITIONFAILED	412
+#define HTTP_INTERNALERROR	500
+
 ucl_object_t *jail_list(void);
 ucl_object_t *ports_list(void);
 bool read_line_at(int fd, const char *fn, char **buf, size_t *sz);
 ucl_object_t *scgi_parse(char *data);
-void scgi_send(int fd, unsigned char *data);
+void scgi_send(int fd, int status, unsigned char *data);

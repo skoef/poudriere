@@ -77,7 +77,7 @@ send_object(struct client *cl, ucl_object_t *o)
 	if (o == NULL)
 		o = ucl_object_typed_new(UCL_OBJECT);
 
-	scgi_send(cl->fd, ucl_object_emit(o, UCL_EMIT_JSON_COMPACT));
+	scgi_send(cl->fd, HTTP_OK, ucl_object_emit(o, UCL_EMIT_JSON_COMPACT));
 
 	ucl_object_unref(o);
 }
