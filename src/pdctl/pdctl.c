@@ -82,6 +82,9 @@ main(int argc, char **argv)
 	if (uri == NULL)
 		uri = "/";
 
+	if (*uri != '/')
+		err(EXIT_FAILURE, "The uri should start with a '/'");
+
 	parser = ucl_parser_new(UCL_PARSER_KEY_LOWERCASE);
 	if (!ucl_parser_add_file(parser, PREFIX"/etc/poudriered.conf")) {
 		errx(EXIT_FAILURE, "Failed to parse configuration file: %s",
