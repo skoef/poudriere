@@ -51,6 +51,8 @@
 #include <ucl.h>
 #include <unistd.h>
 
+#include "jail.h"
+
 static ucl_object_t *conf;
 static ucl_object_t *queue = NULL;
 static int server_fd = -1;
@@ -444,9 +446,6 @@ execute_cmd() {
 	if (logfd == -1)
 		logfd = open("/dev/null", O_RDWR);
 
-	o = ucl_object_find_key(running, "command");
-	a = ucl_object_find_key(running, "arguments");
-
 	posix_spawn_file_actions_init(&action);
 	posix_spawn_file_actions_adddup2(&action, logfd, STDOUT_FILENO);
 	posix_spawn_file_actions_adddup2(&action, logfd, STDERR_FILENO);
@@ -553,6 +552,17 @@ client_exec(struct client *cl)
 				msg = ucl_object_insert_key(msg, running ?
 				    running : ucl_object_new(), "data", 4,
 				    true);
+				send_object(cl, msg);
+			} else if (!strcmp(ucl_object_tostring(c), "jail")) {
+				ucl_object_t *msg = NULL;
+				ucl_object_t *o = jail_list();
+				if (o == NULL)
+					msg = ucl_object_insert_key(msg,
+					    ucl_object_typed_new(UCL_ARRAY),
+					    "jail", 4, true);
+				else
+					msg = ucl_object_insert_key(msg, o,
+					    "jail", 4, true);
 				send_object(cl, msg);
 			}
 		} else {
@@ -801,7 +811,7 @@ main(void)
 		}
 	}
 
-	if ((conffd = open(PREFIX"/etc/poudriered", O_RDWR|O_CREAT|O_DIRECTORY)) == -1) {
+	if ((conffd = open(PREFIX"/etc/poudriere.d", O_RDONLY|O_DIRECTORY)) == -1) {
 		warn("unable to open the configuration directory");
 		ucl_object_unref(conf);
 		return (EXIT_FAILURE);
