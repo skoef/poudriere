@@ -74,6 +74,11 @@ main(int argc, char **argv)
 	if (method == NULL)
 		method = "GET";
 
+	if (strcmp(method, "GET") != 0 &&
+	    strcmp(method, "POST") != 0 &&
+	    strcmp(method, "DELETE") != 0)
+		err(EXIT_FAILURE, "the only valid method are: 'GET', 'POST', 'DELETE'");
+
 	if (uri == NULL)
 		uri = "/";
 
