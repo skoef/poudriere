@@ -66,7 +66,7 @@ int conffd = -1;
 struct client {
 	int fd;
 	struct sockaddr_storage ss;
-	struct sbuf *buf;
+	ucl_object_t *req;
 	uid_t uid;
 	gid_t gid;
 };
@@ -77,7 +77,7 @@ send_object(struct client *cl, ucl_object_t *o)
 	if (o == NULL)
 		o = ucl_object_typed_new(UCL_OBJECT);
 
-	dprintf(cl->fd, "%s\n", ucl_object_emit(o, UCL_EMIT_JSON_COMPACT));
+	scgi_send(cl->fd, ucl_object_emit(o, UCL_EMIT_JSON_COMPACT));
 
 	ucl_object_unref(o);
 }
@@ -156,7 +156,8 @@ close_socket(int dummy) {
 void
 client_free(struct client *cl)
 {
-	sbuf_delete(cl->buf);
+	if (cl->req != NULL)
+		ucl_object_unref(cl->req);
 	if (cl->fd != -1)
 		close(cl->fd);
 	free(cl);
@@ -515,21 +516,11 @@ client_exec(struct client *cl)
 {
 	ucl_object_t *cmd, *c, *cmd_cred;
 	bool cmd_allowed = false;
-	struct ucl_parser *p;
-	/* unpack the command */
-	p = ucl_parser_new(UCL_PARSER_KEY_LOWERCASE);
-	if (!ucl_parser_add_chunk(p, (const unsigned char *)sbuf_data(cl->buf),
-	    sbuf_len(cl->buf))) {
-		send_error(cl, ucl_parser_get_error(p));
-		ucl_parser_free(p);
-		return;
-	}
-
-	cmd = ucl_parser_get_object(p);
-	ucl_parser_free(p);
 
         syslog(LOG_INFO, "uid(%d) sent request: %s", cl->uid,
-	    sbuf_data(cl->buf));
+	    ucl_object_emit(cl->req, UCL_EMIT_JSON_COMPACT));
+
+	cmd = ucl_object_find_key(cl->req, "data");
 
 	if ((c = ucl_object_find_key(cmd, "operation"))) {
 		/* The user specified an operation not a command */
@@ -620,18 +611,19 @@ client_read(struct client *cl, long len)
 {
 	int r;
 	char buf[BUFSIZ];
+	struct sbuf *b = sbuf_new_auto();
 
 	r = read(cl->fd, buf, sizeof(buf));
 	if (r < 0 && (errno == EINTR || errno == EAGAIN))
 		return;
 
-	sbuf_bcat(cl->buf, buf, r);
+	sbuf_bcat(b, buf, r);
 
 	if ((long)r == len) {
-		sbuf_finish(cl->buf);
+		cl->req = scgi_parse(sbuf_data(b));
 		client_exec(cl);
-		sbuf_clear(cl->buf);
 	}
+	sbuf_delete(b);
 }
 
 static struct client *
@@ -645,7 +637,7 @@ client_new(int fd)
 		errx(EXIT_FAILURE, "Unable to allocate memory");
 
 	sz = sizeof(cl->ss);
-	cl->buf = sbuf_new_auto();
+	cl->req = NULL;
 
 	cl->fd = accept(fd, (struct sockaddr *)&(cl->ss), &sz);
 
@@ -873,10 +865,10 @@ main(void)
 	signal(SIGPIPE, SIG_IGN);
 	signal(SIGHUP, reload_signal);
 
-	if (daemon(0, 0) == -1) {
+/*	if (daemon(0, 0) == -1) {
 		pidfile_remove(pfh);
 		err(EXIT_FAILURE, "Cannot daemonize");
-	}
+	}*/
 
 	pidfile_write(pfh);
 

@@ -29,3 +29,5 @@
 ucl_object_t *jail_list(void);
 ucl_object_t *ports_list(void);
 bool read_line_at(int fd, const char *fn, char **buf, size_t *sz);
+ucl_object_t *scgi_parse(char *data);
+void scgi_send(int fd, unsigned char *data);
