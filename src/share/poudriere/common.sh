@@ -151,6 +151,10 @@ msg_debug() {
 	msg "DEBUG: $1" >&2
 }
 
+warn() {
+	msg "WARNING: $@" >&2
+}
+
 job_msg() {
 	if [ -n "${MY_JOBID}" ]; then
 		msg "[${MY_JOBID}] $1" >&5
@@ -284,7 +288,21 @@ buildlog_start() {
 	echo "maintained by: $(injail make -C ${portdir} maintainer)"
 	echo "Makefile ident: $(ident ${mnt}/${portdir}/Makefile|sed -n '2,2p')"
 	echo "Poudriere version: ${POUDRIERE_VERSION}"
-	echo ""
+	echo "Host OSVERSION: ${HOST_OSVERSION}"
+	echo "Jail OSVERSION: ${JAIL_OSVERSION}"
+	echo
+	if [ ${JAIL_OSVERSION} -gt ${HOST_OSVERSION} ]; then
+		echo
+		echo
+		echo
+		echo "!!! Jail is newer than host. (Jail: ${JAIL_OSVERSION}, Host: ${HOST_OSVERSION}) !!!"
+		echo "!!! This is not supported. !!!"
+		echo "!!! Host kernel must be same or newer than jail. !!!"
+		echo "!!! Expect build failures. !!!"
+		echo
+		echo
+		echo
+	fi
 	echo "---Begin Environment---"
 	injail env ${PKGENV} ${PORT_FLAGS}
 	echo "---End Environment---"
@@ -1246,6 +1264,16 @@ jail_start() {
 	echo "poudriere" >> ${tomnt}/.cpignore
 	echo " done"
 
+	JAIL_OSVERSION=$(awk '/\#define __FreeBSD_version/ { print $3 }' "${mnt}/usr/include/sys/param.h")
+
+	if [ ${JAIL_OSVERSION} -gt ${HOST_OSVERSION} ]; then
+		warn "!!! Jail is newer than host. (Jail: ${JAIL_OSVERSION}, Host: ${HOST_OSVERSION}) !!!"
+		warn "This is not supported."
+		warn "Host kernel must be same or newer than jail."
+		warn "Expect build failures."
+		sleep 5
+	fi
+
 	msg "Mounting system devices for ${MASTERNAME}"
 	do_jail_mounts ${tomnt} ${arch}
 
@@ -1922,9 +1950,6 @@ Try testport with -n to use PREFIX=LOCALBASE"
 					etc/gconf/gconf.xml.defaults/%gconf-tree*.xml) ;;
 					# fc-cache - skip for now
 					/var/db/fontconfig/*) ;;
-					# this leftover has to stay during dbus upgrade
-					# otherwise dbus dies horribly
-					@dirrm\ /var/db/dbus|/var/db/dbus/machine-id) ;;
 					*) echo "${ppath}" >> ${add} ;;
 					esac
 					;;
@@ -1944,7 +1969,6 @@ Try testport with -n to use PREFIX=LOCALBASE"
 					fi
 					;;
 				M)
-					[ -d "${path}" ] && continue
 					case "${ppath}" in
 					# gconftool-2 --makefile-uninstall-rule is unpredictable
 					etc/gconf/gconf.xml.defaults/%gconf-tree*.xml) ;;
@@ -3047,6 +3071,8 @@ compute_deps() {
 }
 
 listed_ports() {
+	local tell_moved="${1}"
+
 	if [ ${ALL} -eq 1 ]; then
 		PORTSDIR=$(pget ${PTNAME} mnt)
 		[ -d "${PORTSDIR}/ports" ] && PORTSDIR="${PORTSDIR}/ports"
@@ -3055,12 +3081,26 @@ listed_ports() {
 		done
 		return 0
 	fi
-	if [ -z "${LISTPORTS}" ]; then
-		[ -n "${LISTPKGS}" ] &&
-			grep -h -v -E '(^[[:space:]]*#|^[[:space:]]*$)' ${LISTPKGS} | sed 's,/*$,,'
-	else
-		echo ${LISTPORTS} | tr ' ' '\n' | sed 's,/*$,,'
-	fi
+
+	{
+		# -f specified
+		if [ -z "${LISTPORTS}" ]; then
+			[ -n "${LISTPKGS}" ] &&
+			    grep -h -v -E \
+			    '(^[[:space:]]*#|^[[:space:]]*$)' ${LISTPKGS} |
+			    sed 's,/*$,,'
+		else
+			# Ports specified on cmdline
+			echo ${LISTPORTS} | tr ' ' '\n' | sed 's,/*$,,'
+		fi
+	} | while read origin; do
+		if check_moved new_origin ${origin}; then
+			[ -n "${tell_moved}" ] && msg \
+			    "MOVED: ${origin} renamed to ${new_origin}" >&2
+			origin=${new_origin}
+		fi
+		echo "${origin}"
+	done
 }
 
 # Port was requested to be built
@@ -3342,7 +3382,7 @@ prepare_ports() {
 
 	:> "${MASTERMNT}/poudriere/port_deps.unsorted"
 	parallel_start
-	for port in $(listed_ports); do
+	for port in $(listed_ports show_moved); do
 		[ -d "${MASTERMNT}/usr/ports/${port}" ] ||
 			err 1 "Invalid port origin listed for build: ${port}"
 		parallel_run compute_deps ${port}
@@ -3664,6 +3704,13 @@ if [ -z "${NO_ZFS}" ]; then
 	case ${ZROOTFS} in
 	[!/]*) err 1 "ZROOTFS shoud start with a /" ;;
 	esac
+fi
+
+HOST_OSVERSION="$(sysctl -n kern.osreldate)"
+if [ -z "${NO_ZFS}" -a -z "${ZFS_DEADLOCK_IGNORED}" ]; then
+	[ ${HOST_OSVERSION} -gt 900000 -a \
+	    ${HOST_OSVERSION} -le 901502 ] && err 1 \
+	    "FreeBSD 9.1 ZFS is not safe. It is known to deadlock and cause system hang. Either upgrade the host or set ZFS_DEADLOCK_IGNORED=yes in poudriere.conf"
 fi
 
 [ -n "${MFSSIZE}" -a -n "${USE_TMPFS}" ] && err 1 "You can't use both tmpfs and mdmfs"
