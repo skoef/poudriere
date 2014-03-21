@@ -436,6 +436,8 @@ execute_cmd() {
 	int argc, argvl;
 	ucl_object_t *o, *a, *l;
 
+	o = a = NULL;
+
 	if (running == NULL)
 		return;
 
