@@ -53,7 +53,7 @@ _wait() {
 }
 
 kill_and_wait() {
-	[ $# -eq 2 ] || eargs time pids
+	[ $# -eq 2 ] || eargs kill_and_wait time pids
 	local time="$1"
 	local pids="$2"
 	local ret=0
@@ -91,7 +91,7 @@ kill_and_wait() {
 # Based on Shell Scripting Recipes - Chris F.A. Johnson (c) 2005
 # Replace a pattern without needing a subshell/exec
 _gsub() {
-	[ $# -ne 3 ] && eargs string pattern replacement
+	[ $# -ne 3 ] && eargs _gsub string pattern replacement
 	local string="$1"
 	local pattern="$2"
 	local replacement="$3"
@@ -211,10 +211,12 @@ jstop() {
 }
 
 eargs() {
+	local fname="$1"
+	shift
 	case $# in
-	0) err 1 "No arguments expected" ;;
-	1) err 1 "1 argument expected: $1" ;;
-	*) err 1 "$# arguments expected: $*" ;;
+	0) err 1 "${fname}: No arguments expected" ;;
+	1) err 1 "${fname}: 1 argument expected: $1" ;;
+	*) err 1 "${fname}: $# arguments expected: $*" ;;
 	esac
 }
 
@@ -538,14 +540,14 @@ siginfo_handler() {
 }
 
 jail_exists() {
-	[ $# -ne 1 ] && eargs jailname
+	[ $# -ne 1 ] && eargs jail_exists jailname
 	local jname=$1
 	[ -d ${POUDRIERED}/jails/${jname} ] && return 0
 	return 1
 }
 
 jail_runs() {
-	[ $# -ne 1 ] && eargs jname
+	[ $# -ne 1 ] && eargs jail_runs jname
 	local jname=$1
 	jls -j $jname >/dev/null 2>&1 && return 0
 	return 1
@@ -563,7 +565,7 @@ porttree_list() {
 }
 
 porttree_exists() {
-	[ $# -ne 1 ] && eargs portstree_name
+	[ $# -ne 1 ] && eargs porttree_exists portstree_name
 	porttree_list |
 		awk -v portstree_name=$1 '
 		BEGIN { ret = 1 }
@@ -597,12 +599,12 @@ get_data_dir() {
 }
 
 fetch_file() {
-	[ $# -ne 2 ] && eargs destination source
+	[ $# -ne 2 ] && eargs fetch_file destination source
 	fetch -p -o $1 $2 || fetch -p -o $1 $2 || err 1 "Failed to fetch from $2"
 }
 
 createfs() {
-	[ $# -ne 3 ] && eargs name mnt fs
+	[ $# -ne 3 ] && eargs createfs name mnt fs
 	local name mnt fs
 	name=$1
 	mnt=$(echo $2 | sed -e "s,//,/,g")
@@ -621,7 +623,7 @@ createfs() {
 }
 
 rollbackfs() {
-	[ $# -ne 2 ] && eargs name mnt
+	[ $# -ne 2 ] && eargs rollbackfs name mnt
 	local name=$1
 	local mnt=$2
 	local fs=$(zfs_getfs ${mnt})
@@ -642,7 +644,7 @@ rollbackfs() {
 }
 
 umountfs() {
-	[ $# -lt 1 ] && eargs mnt childonly
+	[ $# -lt 1 ] && eargs umountfs mnt childonly
 	local mnt=$1
 	local childonly=$2
 	local pattern
@@ -664,13 +666,13 @@ umountfs() {
 }
 
 zfs_getfs() {
-	[ $# -ne 1 ] && eargs mnt
+	[ $# -ne 1 ] && eargs zfs_getfs mnt
 	local mnt=$(realpath $1)
 	mount -t zfs | awk -v n="${mnt}" ' $3 == n { print $1 }'
 }
 
 unmarkfs() {
-	[ $# -ne 2 ] && eargs name mnt
+	[ $# -ne 2 ] && eargs unmarkfs name mnt
 	local name=$1
 	local mnt=$(realpath $2)
 
@@ -682,7 +684,7 @@ unmarkfs() {
 }
 
 markfs() {
-	[ $# -lt 2 ] && eargs name mnt path
+	[ $# -lt 2 ] && eargs markfs name mnt path
 	local name=$1
 	local mnt=$(realpath $2)
 	local path="$3"
@@ -797,7 +799,7 @@ EOF
 }
 
 mnt_tmpfs() {
-	[ $# -lt 2 ] && eargs type dst
+	[ $# -lt 2 ] && eargs mnt_tmpfs type dst
 	local type="$1"
 	local dst="$2"
 	local limit size
@@ -819,7 +821,7 @@ mnt_tmpfs() {
 }
 
 clonefs() {
-	[ $# -lt 2 ] && eargs from to snap
+	[ $# -lt 2 ] && eargs clonefs from to snap
 	local from=$1
 	local to=$2
 	local snap=$3
@@ -866,7 +868,7 @@ rm() {
 }
 
 destroyfs() {
-	[ $# -ne 2 ] && eargs name type
+	[ $# -ne 2 ] && eargs destroyfs name type
 	local mnt fs type
 	mnt=$1
 	type=$2
@@ -886,7 +888,7 @@ destroyfs() {
 }
 
 do_jail_mounts() {
-	[ $# -ne 2 ] && eargs mnt arch
+	[ $# -ne 2 ] && eargs do_jail_mounts mnt arch
 	local mnt=$1
 	local arch=$2
 	local devfspath="null zero random urandom stdin stdout stderr fd fd/* bpf* pts pts/*"
@@ -1003,7 +1005,7 @@ EOF
 }
 
 use_options() {
-	[ $# -ne 2 ] && eargs mnt optionsdir
+	[ $# -ne 2 ] && eargs use_options mnt optionsdir
 	local mnt=$1
 	local optionsdir=$2
 
@@ -1030,7 +1032,7 @@ mount_packages() {
 }
 
 do_portbuild_mounts() {
-	[ $# -lt 3 ] && eargs mnt jname ptname setname
+	[ $# -lt 3 ] && eargs do_portbuild_mounts mnt jname ptname setname
 	local mnt=$1
 	local jname=$2
 	local ptname=$3
@@ -1203,7 +1205,7 @@ commit_packages() {
 }
 
 jail_start() {
-	[ $# -lt 2 ] && eargs name ptname setname
+	[ $# -lt 2 ] && eargs jail_start name ptname setname
 	local name=$1
 	local ptname=$2
 	local setname=$3
@@ -1330,7 +1332,7 @@ jail_start() {
 }
 
 load_blacklist() {
-	[ $# -lt 2 ] && eargs name ptname setname
+	[ $# -lt 2 ] && eargs load_blacklist name ptname setname
 	local name=$1
 	local ptname=$2
 	local setname=$3
@@ -1356,7 +1358,7 @@ load_blacklist() {
 }
 
 setup_makeconf() {
-	[ $# -lt 3 ] && eargs dst_makeconf name ptname setname
+	[ $# -lt 3 ] && eargs setup_makeconf dst_makeconf name ptname setname
 	local dst_makeconf=$1
 	local name=$2
 	local ptname=$3
@@ -1372,7 +1374,7 @@ setup_makeconf() {
 }
 
 jail_stop() {
-	[ $# -ne 0 ] && eargs
+	[ $# -ne 0 ] && eargs jail_stop
 
 	# err() will set status to 'crashed', don't override.
 	[ -n "${CRASHED}" ] || bset status "stop:" 2>/dev/null || :
@@ -1447,7 +1449,7 @@ package_dir_exists_and_has_packages() {
 }
 
 sanity_check_pkg() {
-	[ $# -eq 1 ] || eargs pkg
+	[ $# -eq 1 ] || eargs sanity_check_pkg pkg
 	local pkg="$1"
 	local depfile origin
 
@@ -1482,7 +1484,7 @@ sanity_check_pkgs() {
 }
 
 check_leftovers() {
-	[ $# -lt 1 ] && eargs mnt [stagedir]
+	[ $# -lt 1 ] && eargs check_leftovers mnt [stagedir]
 	local mnt=$1
 	local stagedir="$2"
 
@@ -1523,8 +1525,8 @@ check_leftovers() {
 }
 
 check_fs_violation() {
-	[ $# -eq 6 ] || eargs mnt mtree_target port status_msg err_msg \
-	    status_value
+	[ $# -eq 6 ] || eargs check_fs_violation mnt mtree_target port \
+	    status_msg err_msg status_value
 	local mnt="$1"
 	local mtree_target="$2"
 	local port="$3"
@@ -1553,7 +1555,7 @@ check_fs_violation() {
 }
 
 nohang() {
-	[ $# -gt 4 ] || eargs cmd_timeout log_timeout logfile cmd
+	[ $# -gt 4 ] || eargs nohang cmd_timeout log_timeout logfile cmd
 	local cmd_timeout
 	local log_timeout
 	local logfile
@@ -1632,22 +1634,24 @@ nohang() {
 }
 
 gather_distfiles() {
-	[ $# -eq 2 ] || eargs portdir distfiles
+	[ $# -eq 3 ] || eargs gather_distfiles portdir from to
 	local portdir="$1"
-	local distfiles="$2"
-	local sub dists d special
+	local from=$(realpath $2)
+	local to=$(realpath $3)
+	local sub dists d tosubd specials special
 	sub=$(injail make -C ${portdir} -VDIST_SUBDIR)
 	dists=$(injail make -C ${portdir} -V_DISTFILES -V_PATCHFILES)
 	specials=$(injail make -C ${portdir} -V_DEPEND_SPECIALS)
-	job_msg_verbose "Status for build ${portdir##/usr/ports/}: distfiles"
+	job_msg_verbose "Status for build ${portdir##/usr/ports/}: distfiles ${from} -> ${to}"
 	for d in ${dists}; do
-		[ -f ${DISTFILES_CACHE}/${sub}/${d} ] || continue
-		echo ${DISTFILES_CACHE}/${sub}/${d}
-	done | pax -rw -p p -s ",${DISTFILES_CACHE},,g" ${mnt}/portdistfiles ||
-		return 1
+		[ -f ${from}/${sub}/${d} ] || continue
+		tosubd=${to}/${sub}/${d}
+		mkdir -p ${tosubd%/*} || return 1
+		cpdup ${from}/${sub}/${d} ${to}/${sub}/${d} || return 1
+	done
 
 	for special in ${specials}; do
-		gather_distfiles ${special} ${distfiles}
+		gather_distfiles ${special} ${from} ${to}
 	done
 
 	return 0
@@ -1656,7 +1660,7 @@ gather_distfiles() {
 # Build+test port and return 1 on first failure
 # Return 2 on test failure if PORTTESTING_FATAL=no
 _real_build_port() {
-	[ $# -ne 1 ] && eargs portdir
+	[ $# -ne 1 ] && eargs _real_build_port portdir
 	local portdir=$1
 	local port=${portdir##/usr/ports/}
 	local mnt=$(my_path)
@@ -1703,6 +1707,9 @@ _real_build_port() {
 		job_msg_verbose "Status for build ${port}: ${phase}"
 		case ${phase} in
 		fetch)
+			mkdir -p ${mnt}/portdistfiles
+			echo "DISTDIR=/portdistfiles" >> ${mnt}/etc/make.conf
+			gather_distfiles ${portdir} ${DISTFILES_CACHE} ${mnt}/portdistfiles || return 1
 			jstop
 			jstart 1
 			JUSER=root
@@ -1894,9 +1901,7 @@ Try testport with -n to use PREFIX=LOCALBASE"
 		print_phase_footer
 
 		if [ "${phase}" = "checksum" ]; then
-			mkdir -p ${mnt}/portdistfiles
-			echo "DISTDIR=/portdistfiles" >> ${mnt}/etc/make.conf
-			gather_distfiles ${portdir} ${mnt}/portdistfiles || return 1
+			gather_distfiles ${portdir} ${mnt}/portdistfiles ${DISTFILES_CACHE} || return 1
 		fi
 
 		if [ "${phase}" = "deinstall" ]; then
@@ -2055,7 +2060,7 @@ build_port() {
 
 # Save wrkdir and return path to file
 save_wrkdir() {
-	[ $# -ne 4 ] && eargs mnt port portdir phase
+	[ $# -ne 4 ] && eargs save_wrkdir mnt port portdir phase
 	local mnt=$1
 	local port="$2"
 	local portdir="$3"
@@ -2169,11 +2174,12 @@ ${dependency_cycles}"
 
 	# No cycle, there's some unknown poudriere bug
 	err 1 "Unknown stuck queue bug detected. Please submit the entire build output to poudriere developers.
-$(find ${MASTERMNT}/poudriere/building ${MASTERMNT}/poudriere/pool ${MASTERMNT}/poudriere/deps)"
+$(find ${MASTERMNT}/poudriere/building ${MASTERMNT}/poudriere/pool ${MASTERMNT}/poudriere/deps ${MASTERMNT}/poudriere/cleaning)"
 }
 
 queue_empty() {
 	local pool_dir lock dirs
+	local ret=0
 
 	# Lock on balance_pool to avoid race here while it is moving between
 	# /unbalanced and a balanced slot
@@ -2184,17 +2190,17 @@ queue_empty() {
 
 	for pool_dir in ${dirs}; do
 		if ! dirempty ${pool_dir}; then
-			rmdir ${lock}
-			return 1
+			ret=1
+			break
 		fi
 	done
 
 	rmdir ${lock}
-	return 0
+	return ${ret}
 }
 
 mark_done() {
-	[ $# -eq 1 ] || eargs pkgname
+	[ $# -eq 1 ] || eargs mark_done pkgname
 	local pkgname="$1"
 	local origin
 	local cache_dir
@@ -2221,6 +2227,8 @@ build_queue() {
 
 	msg "Hit CTRL+t at any time to see build progress and stats"
 
+	cd "${MASTERMNT}/poudriere/pool"
+
 	while :; do
 		builders_active=0
 		for j in ${JOBS}; do
@@ -2233,8 +2241,12 @@ build_queue() {
 				read pkgname < ${MASTERMNT}/poudriere/var/run/${j}.pkgname
 				rm -f ${MASTERMNT}/poudriere/var/run/${j}.pid \
 					${MASTERMNT}/poudriere/var/run/${j}.pkgname
-				bset ${j} status "idle:"
-				mark_done ${pkgname}
+				if [ "$(bget ${j} status)" = "stopped:" ]; then
+					mark_done ${pkgname}
+					bset ${j} status "idle:"
+				else
+					bset ${j} status "crashed:"
+				fi
 			fi
 
 			[ ${queue_empty} -eq 0 ] || continue
@@ -2383,10 +2395,12 @@ parallel_build() {
 }
 
 clean_pool() {
-	[ $# -ne 2 ] && eargs pkgname clean_rdepends
+	[ $# -ne 2 ] && eargs clean_pool pkgname clean_rdepends
 	local pkgname=$1
 	local clean_rdepends=$2
 	local port skipped_origin
+
+	[ -n "${MY_JOBID}" ] && bset ${MY_JOBID} status "clean_pool:"
 
 	[ ${clean_rdepends} -eq 1 ] && cache_get_origin port "${pkgname}"
 
@@ -2412,7 +2426,7 @@ print_phase_footer() {
 build_pkg() {
 	# If this first check fails, the pool will not be cleaned up,
 	# since PKGNAME is not yet set.
-	[ $# -ne 1 ] && eargs pkgname
+	[ $# -ne 1 ] && eargs build_pkg pkgname
 	local pkgname="$1"
 	local port portdir
 	local build_failed=0
@@ -2446,7 +2460,7 @@ build_pkg() {
 	# Make sure we start with no network
 	jstart 0
 
-	touch ${mnt}/.need_rollback
+	:> ${mnt}/.need_rollback
 
 	case " ${BLACKLIST} " in
 	*\ ${port}\ *) ignore="Blacklisted" ;;
@@ -2478,6 +2492,7 @@ build_pkg() {
 		build_port ${portdir} || ret=$?
 		if [ ${ret} -ne 0 ]; then
 			build_failed=1
+			# ret=2 is a test failure
 			if [ ${ret} -eq 2 ]; then
 				failed_phase=$(/bin/sh ${SCRIPTPREFIX}/processonelog2.sh \
 					${log}/logs/${PKGNAME}.log \
@@ -2510,6 +2525,7 @@ build_pkg() {
 			job_msg "Finished build of ${port}: Failed: ${failed_phase}"
 			run_hook pkgbuild failed "${port}" "${PKGNAME}" "${failed_phase}" \
 				"${log}/logs/errors/${PKGNAME}.log"
+			# ret=2 is a test failure
 			if [ ${ret} -eq 2 ]; then
 				clean_rdepends=0
 			else
@@ -2528,7 +2544,7 @@ build_pkg() {
 }
 
 stop_build() {
-	[ $# -eq 1 ] || eargs portdir
+	[ $# -eq 1 ] || eargs stop_build portdir
 	local portdir="$1"
 	local mnt=$(my_path)
 
@@ -2545,6 +2561,8 @@ stop_build() {
 
 	buildlog_stop ${portdir}
 	log_stop
+
+	bset ${MY_JOBID} status "stopped:"
 }
 
 # Crazy redirection is to add the portname into stderr.
@@ -3031,8 +3049,49 @@ cache_get_origin() {
 	setvar "${var_return}" "${_origin}"
 }
 
-# Take optional pkgname to speedup lookup
 compute_deps() {
+	local port pkgname dep_pkgname
+
+	msg "Calculating ports order and dependencies"
+	bset status "computingdeps:"
+
+	:> "${MASTERMNT}/poudriere/port_deps.unsorted"
+	:> "${MASTERMNT}/poudriere/pkg_deps.unsorted"
+
+	parallel_start
+	for port in $(listed_ports show_moved); do
+		[ -d "${MASTERMNT}/usr/ports/${port}" ] ||
+			err 1 "Invalid port origin listed for build: ${port}"
+		parallel_run compute_deps_port ${port}
+	done
+	parallel_stop
+
+	sort -u "${MASTERMNT}/poudriere/pkg_deps.unsorted" > \
+	    "${MASTERMNT}/poudriere/pkg_deps"
+
+	bset status "computingrdeps:"
+
+	# cd into rdeps to allow xargs mkdir to have more args.
+	cd "${MASTERMNT}/poudriere/rdeps"
+	awk '{print $2}' "${MASTERMNT}/poudriere/pkg_deps" |
+	    sort -u | xargs mkdir
+
+	# xargs|touch was no quicker here.
+	while read dep_pkgname pkgname; do
+		:> "${MASTERMNT}/poudriere/rdeps/${pkgname}/${dep_pkgname}"
+	done < "${MASTERMNT}/poudriere/pkg_deps"
+
+	sort -u "${MASTERMNT}/poudriere/port_deps.unsorted" > \
+		"${MASTERMNT}/poudriere/port_deps"
+
+	rm -f "${MASTERMNT}/poudriere/port_deps.unsorted" \
+	    "${MASTERMNT}/poudriere/pkg_deps.unsorted"
+
+	return 0
+}
+
+# Take optional pkgname to speedup lookup
+compute_deps_port() {
 	[ $# -lt 1 ] && eargs port
 	[ $# -gt 2 ] && eargs port pkgnme
 	local port=$1
@@ -3059,12 +3118,11 @@ compute_deps() {
 		# Only do this if it's not already done, and not ALL, as everything will
 		# be touched anyway
 		[ ${ALL} -eq 0 ] && ! [ -d "${MASTERMNT}/poudriere/deps/${dep_pkgname}" ] &&
-			compute_deps "${dep_port}" "${dep_pkgname}"
+			compute_deps_port "${dep_port}" "${dep_pkgname}"
 
 		:> "${pkg_pooldir}/${dep_pkgname}"
-		mkdir -p "${MASTERMNT}/poudriere/rdeps/${dep_pkgname}"
-		ln -sf "${pkg_pooldir}/${dep_pkgname}" \
-			"${MASTERMNT}/poudriere/rdeps/${dep_pkgname}/${pkgname}"
+		echo "${pkgname} ${dep_pkgname}" >> \
+		    "${MASTERMNT}/poudriere/pkg_deps.unsorted"
 		echo "${port} ${dep_port}" >> \
 			${MASTERMNT}/poudriere/port_deps.unsorted
 	done
@@ -3265,20 +3323,28 @@ parallel_run() {
 find_all_pool_references() {
 	[ $# -ne 1 ] && eargs pkgname
 	local pkgname="$1"
-	local rpn
+	local rpn dep_pkgname
 
 	# Cleanup rdeps/*/${pkgname}
-	for rpn in $(ls "${MASTERMNT}/poudriere/deps/${pkgname}"); do
-		echo "${MASTERMNT}/poudriere/rdeps/${rpn}/${pkgname}"
+	for rpn in ${MASTERMNT}/poudriere/deps/${pkgname}/*; do
+		case "${rpn}" in
+			"${MASTERMNT}/poudriere/deps/${pkgname}/*")
+				break ;;
+		esac
+		dep_pkgname=${rpn##*/}
+		echo "${MASTERMNT}/poudriere/rdeps/${dep_pkgname}/${pkgname}"
 	done
 	echo "${MASTERMNT}/poudriere/deps/${pkgname}"
 	# Cleanup deps/*/${pkgname}
-	if [ -d "${MASTERMNT}/poudriere/rdeps/${pkgname}" ]; then
-		for rpn in $(ls "${MASTERMNT}/poudriere/rdeps/${pkgname}"); do
-			echo "${MASTERMNT}/poudriere/deps/${rpn}/${pkgname}"
-		done
-		echo "${MASTERMNT}/poudriere/rdeps/${pkgname}"
-	fi
+	for rpn in ${MASTERMNT}/poudriere/rdeps/${pkgname}/*; do
+		case "${rpn}" in
+			"${MASTERMNT}/poudriere/rdeps/${pkgname}/*")
+				break ;;
+		esac
+		dep_pkgname=${rpn##*/}
+		echo "${MASTERMNT}/poudriere/deps/${dep_pkgname}/${pkgname}"
+	done
+	echo "${MASTERMNT}/poudriere/rdeps/${pkgname}"
 }
 
 delete_stale_symlinks_and_empty_dirs() {
@@ -3326,7 +3392,7 @@ check_moved() {
 prepare_ports() {
 	local pkg
 	local log=$(log_path)
-	local n port pn nbq resuming_build
+	local n pn nbq resuming_build
 	local cache_dir
 
 	mkdir -p "${MASTERMNT}/poudriere"
@@ -3337,19 +3403,12 @@ prepare_ports() {
 		"${MASTERMNT}/poudriere/pool" \
 		"${MASTERMNT}/poudriere/deps" \
 		"${MASTERMNT}/poudriere/rdeps" \
+		"${MASTERMNT}/poudriere/cleaning/deps" \
+		"${MASTERMNT}/poudriere/cleaning/rdeps" \
 		"${MASTERMNT}/poudriere/var/run" \
 		"${MASTERMNT}/poudriere/var/cache" \
 		"${MASTERMNT}/poudriere/var/cache/origin-pkgname" \
 		"${MASTERMNT}/poudriere/var/cache/pkgname-origin"
-
-	POOL_BUCKET_DIRS=""
-	if [ ${POOL_BUCKETS} -gt 0 ]; then
-		# Add pool/N dirs in reverse order from highest to lowest
-		for n in $(jot ${POOL_BUCKETS} 0 | sort -nr); do
-			POOL_BUCKET_DIRS="${POOL_BUCKET_DIRS} ${MASTERMNT}/poudriere/pool/${n}"
-		done
-	fi
-	mkdir -p ${POOL_BUCKET_DIRS} ${MASTERMNT}/poudriere/pool/unbalanced
 
 	if was_a_bulk_run; then
 		get_cache_dir cache_dir
@@ -3377,21 +3436,7 @@ prepare_ports() {
 
 	load_moved
 
-	msg "Calculating ports order and dependencies"
-	bset status "computingdeps:"
-
-	:> "${MASTERMNT}/poudriere/port_deps.unsorted"
-	parallel_start
-	for port in $(listed_ports show_moved); do
-		[ -d "${MASTERMNT}/usr/ports/${port}" ] ||
-			err 1 "Invalid port origin listed for build: ${port}"
-		parallel_run compute_deps ${port}
-	done
-	parallel_stop
-
-	sort -u "${MASTERMNT}/poudriere/port_deps.unsorted" > \
-		"${MASTERMNT}/poudriere/port_deps"
-	rm -f "${MASTERMNT}/poudriere/port_deps.unsorted"
+	compute_deps
 
 	bset status "sanity:"
 
@@ -3507,6 +3552,22 @@ prepare_ports() {
 		bset stats_queued ${nbq##* }
 	fi
 
+	POOL_BUCKET_DIRS=""
+	if [ ${POOL_BUCKETS} -gt 0 ]; then
+		tsort -D "${MASTERMNT}/poudriere/pkg_deps" > \
+		    "${MASTERMNT}/poudriere/pkg_deps.depth"
+
+		# Create buckets to satisfy the dependency chains, in reverse
+		# order. Not counting here as there may be boosted priorities
+		# at 99 or other high values.
+		POOL_BUCKET_DIRS=$(awk '{print $1}' \
+		    "${MASTERMNT}/poudriere/pkg_deps.depth"|sort -run)
+	else
+		POOL_BUCKET_DIRS="unbalanced"
+	fi
+
+	( cd ${MASTERMNT}/poudriere/pool && mkdir -p ${POOL_BUCKET_DIRS} ${MASTERMNT}/poudriere/pool/unbalanced )
+
 	# Create a pool of ready-to-build from the deps pool
 	find "${MASTERMNT}/poudriere/deps" -type d -empty -depth 1 | \
 		xargs -J % mv % "${MASTERMNT}/poudriere/pool/unbalanced"
@@ -3524,7 +3585,7 @@ balance_pool() {
 	# Don't bother if disabled
 	[ ${POOL_BUCKETS} -gt 0 ] || return 0
 
-	local pkgname pkg_dir dep_count rdep lock
+	local pkgname pkg_dir dep_count lock
 
 	! dirempty ${MASTERMNT}/poudriere/pool/unbalanced || return 0
 	# Avoid running this in parallel, no need
@@ -3536,18 +3597,12 @@ balance_pool() {
 	else
 		bset status "balancing_pool:"
 	fi
+
 	# For everything ready-to-build...
 	for pkg_dir in ${MASTERMNT}/poudriere/pool/unbalanced/*; do
 		pkgname=${pkg_dir##*/}
-		dep_count=0
-		# Determine its priority, based on how much depends on it
-		for rdep in ${MASTERMNT}/poudriere/rdeps/${pkgname}/*; do
-			# Empty
-			[ ${rdep} = "${MASTERMNT}/poudriere/rdeps/${pkgname}/*" ] && break
-			dep_count=$(($dep_count + 1))
-			[ $dep_count -eq $((${POOL_BUCKETS} - 1)) ] && break
-		done
-		mv ${pkg_dir} ${MASTERMNT}/poudriere/pool/${dep_count##* }/ 2>/dev/null || :
+		dep_count=$(awk -vpkgname=${pkgname} '$2 == pkgname {print $1; printed=1} END {if (!printed) print "0"}' "${MASTERMNT}/poudriere/pkg_deps.depth")
+		mv ${pkg_dir} ${MASTERMNT}/poudriere/pool/${dep_count}/
 	done
 
 	rmdir ${lock}
@@ -3822,7 +3877,8 @@ esac
 
 case ${POOL_BUCKETS} in
 ''|*[!0-9]*)
-	POOL_BUCKETS=10
+	# 1 will auto determine proper size, 0 disables.
+	POOL_BUCKETS=1
 	;;
 esac
 

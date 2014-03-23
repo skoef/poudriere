@@ -80,12 +80,12 @@ NORMAL_UNINSTALL = :
 PRE_UNINSTALL = :
 POST_UNINSTALL = :
 pkglibexec_PROGRAMS = cpdup$(EXEEXT) dirempty$(EXEEXT) \
-	dirwatch$(EXEEXT) make_index$(EXEEXT) nc$(EXEEXT) \
-	rename$(EXEEXT)
+	dirwatch$(EXEEXT) nc$(EXEEXT) rename$(EXEEXT) tsort$(EXEEXT)
 sbin_PROGRAMS = poudriered$(EXEEXT) pdctl$(EXEEXT)
 subdir = .
 DIST_COMMON = $(srcdir)/Makefile.in $(srcdir)/Makefile.am \
 	$(top_srcdir)/configure $(am__configure_deps) \
+	$(top_srcdir)/src/config.h.in \
 	$(top_srcdir)/src/etc/rc.d/poudriered.in $(dist_bin_SCRIPTS) \
 	$(dist_rc_SCRIPTS) depcomp $(dist_man_MANS) \
 	$(dist_assets_DATA) $(dist_awk_DATA) $(dist_btcss_DATA) \
@@ -99,6 +99,7 @@ am__configure_deps = $(am__aclocal_m4_deps) $(CONFIGURE_DEPENDENCIES) \
 am__CONFIG_DISTCLEAN_FILES = config.status config.cache config.log \
  configure.lineno config.status.lineno
 mkinstalldirs = $(install_sh) -d
+CONFIG_HEADER = $(top_builddir)/src/config.h
 CONFIG_CLEAN_FILES = src/etc/rc.d/poudriered
 CONFIG_CLEAN_VPATH_FILES =
 LIBRARIES = $(noinst_LIBRARIES)
@@ -125,7 +126,8 @@ am__installdirs = "$(DESTDIR)$(pkglibexecdir)" "$(DESTDIR)$(sbindir)" \
 	"$(DESTDIR)$(btimgdir)" "$(DESTDIR)$(btjsdir)" \
 	"$(DESTDIR)$(dtcssdir)" "$(DESTDIR)$(dtimagesdir)" \
 	"$(DESTDIR)$(dtjsdir)" "$(DESTDIR)$(htmldir)" \
-	"$(DESTDIR)$(pkgdatadir)" "$(DESTDIR)$(sysconfdir)"
+	"$(DESTDIR)$(pkgdatadir)" "$(DESTDIR)$(hookdir)" \
+	"$(DESTDIR)$(sysconfdir)"
 PROGRAMS = $(pkglibexec_PROGRAMS) $(sbin_PROGRAMS)
 am_cpdup_OBJECTS = src/libexec/poudriere/cpdup/cpdup-cpdup.$(OBJEXT) \
 	src/libexec/poudriere/cpdup/cpdup-hcproto.$(OBJEXT) \
@@ -145,10 +147,6 @@ am_dirwatch_OBJECTS =  \
 	src/libexec/poudriere/dirwatch/dirwatch.$(OBJEXT)
 dirwatch_OBJECTS = $(am_dirwatch_OBJECTS)
 dirwatch_LDADD = $(LDADD)
-am_make_index_OBJECTS =  \
-	src/libexec/poudriere/make_index/make_index.$(OBJEXT)
-make_index_OBJECTS = $(am_make_index_OBJECTS)
-make_index_DEPENDENCIES =
 am_nc_OBJECTS = src/libexec/poudriere/nc/nc.$(OBJEXT)
 nc_OBJECTS = $(am_nc_OBJECTS)
 nc_LDADD = $(LDADD)
@@ -170,6 +168,9 @@ poudriered_LINK = $(CCLD) $(poudriered_CFLAGS) $(CFLAGS) $(AM_LDFLAGS) \
 am_rename_OBJECTS = src/libexec/poudriere/rename/rename.$(OBJEXT)
 rename_OBJECTS = $(am_rename_OBJECTS)
 rename_LDADD = $(LDADD)
+am_tsort_OBJECTS = src/libexec/poudriere/tsort/tsort.$(OBJEXT)
+tsort_OBJECTS = $(am_tsort_OBJECTS)
+tsort_LDADD = $(LDADD)
 am__vpath_adj_setup = srcdirstrip=`echo "$(srcdir)" | sed 's|.|.|g'`;
 am__vpath_adj = case $$p in \
     $(srcdir)/*) f=`echo "$$p" | sed "s|^$$srcdirstrip/||"`;; \
@@ -210,7 +211,7 @@ AM_V_at = $(am__v_at_@AM_V@)
 am__v_at_ = $(am__v_at_@AM_DEFAULT_V@)
 am__v_at_0 = @
 am__v_at_1 = 
-DEFAULT_INCLUDES = -I.@am__isrc@
+DEFAULT_INCLUDES = -I.@am__isrc@ -I$(top_builddir)/src
 depcomp = $(SHELL) $(top_srcdir)/depcomp
 am__depfiles_maybe = depfiles
 am__mv = mv -f
@@ -231,12 +232,12 @@ am__v_CCLD_ = $(am__v_CCLD_@AM_DEFAULT_V@)
 am__v_CCLD_0 = @echo "  CCLD    " $@;
 am__v_CCLD_1 = 
 SOURCES = $(libucl_a_SOURCES) $(cpdup_SOURCES) $(dirempty_SOURCES) \
-	$(dirwatch_SOURCES) $(make_index_SOURCES) $(nc_SOURCES) \
-	$(pdctl_SOURCES) $(poudriered_SOURCES) $(rename_SOURCES)
+	$(dirwatch_SOURCES) $(nc_SOURCES) $(pdctl_SOURCES) \
+	$(poudriered_SOURCES) $(rename_SOURCES) $(tsort_SOURCES)
 DIST_SOURCES = $(libucl_a_SOURCES) $(cpdup_SOURCES) \
-	$(dirempty_SOURCES) $(dirwatch_SOURCES) $(make_index_SOURCES) \
-	$(nc_SOURCES) $(pdctl_SOURCES) $(poudriered_SOURCES) \
-	$(rename_SOURCES)
+	$(dirempty_SOURCES) $(dirwatch_SOURCES) $(nc_SOURCES) \
+	$(pdctl_SOURCES) $(poudriered_SOURCES) $(rename_SOURCES) \
+	$(tsort_SOURCES)
 am__can_run_installinfo = \
   case $$AM_UPDATE_INFO_DIR in \
     n|no|NO) false;; \
@@ -248,7 +249,7 @@ MANS = $(dist_man_MANS)
 DATA = $(dist_assets_DATA) $(dist_awk_DATA) $(dist_btcss_DATA) \
 	$(dist_btimg_DATA) $(dist_btjs_DATA) $(dist_dtcss_DATA) \
 	$(dist_dtimages_DATA) $(dist_dtjs_DATA) $(dist_html_DATA) \
-	$(dist_pkgdata_DATA) $(sysconf_DATA)
+	$(dist_pkgdata_DATA) $(hook_DATA) $(sysconf_DATA)
 am__tagged_files = $(HEADERS) $(SOURCES) $(TAGS_FILES) $(LISP)
 # Read a list of newline-separated strings from the standard input,
 # and print each of them once, without duplicates.  Input order is
@@ -297,6 +298,7 @@ AWK = @AWK@
 CC = @CC@
 CCDEPMODE = @CCDEPMODE@
 CFLAGS = @CFLAGS@
+CPP = @CPP@
 CPPFLAGS = @CPPFLAGS@
 CYGPATH_W = @CYGPATH_W@
 DEFS = @DEFS@
@@ -304,7 +306,9 @@ DEPDIR = @DEPDIR@
 ECHO_C = @ECHO_C@
 ECHO_N = @ECHO_N@
 ECHO_T = @ECHO_T@
+EGREP = @EGREP@
 EXEEXT = @EXEEXT@
+GREP = @GREP@
 INSTALL = @INSTALL@
 INSTALL_DATA = @INSTALL_DATA@
 INSTALL_PROGRAM = @INSTALL_PROGRAM@
@@ -384,10 +388,14 @@ dtcssdir = $(datatablesdir)/css
 dtimagesdir = $(datatablesdir)/images
 dtjsdir = $(datatablesdir)/js
 rcdir = $(sysconfdir)/rc.d
+hookdir = $(sysconfdir)/poudriere.d/hooks
 dist_bin_SCRIPTS = src/bin/poudriere
 dist_man_MANS = src/bin/poudriere.8
 sysconf_DATA = src/etc/poudriere.conf.sample \
 		src/etc/poudriered.conf.sample
+
+hook_DATA = src/etc/poudriere.d/hooks/bulk.sh.sample \
+		src/etc/poudriere.d/hooks/pkgbuild.sh.sample
 
 dist_pkgdata_DATA = src/share/poudriere/bulk.sh \
 			src/share/poudriere/clean.sh \
@@ -454,8 +462,7 @@ cpdup_CFLAGS = -D_ST_FLAGS_PRESENT_=1
 dirempty_SOURCES = src/libexec/poudriere/dirempty/dirempty.c
 dirwatch_SOURCES = src/libexec/poudriere/dirwatch/dirwatch.c
 nc_SOURCES = src/libexec/poudriere/nc/nc.c
-make_index_SOURCES = src/libexec/poudriere/make_index/make_index.c
-make_index_LDADD = -ljail -lsbuf
+tsort_SOURCES = src/libexec/poudriere/tsort/tsort.c
 libucl_a_SOURCES = external/libucl/src/ucl_emitter.c \
 			external/libucl/src/ucl_hash.c \
 			external/libucl/src/ucl_parser.c \
@@ -525,6 +532,21 @@ $(top_srcdir)/configure:  $(am__configure_deps)
 $(ACLOCAL_M4):  $(am__aclocal_m4_deps)
 	$(am__cd) $(srcdir) && $(ACLOCAL) $(ACLOCAL_AMFLAGS)
 $(am__aclocal_m4_deps):
+
+src/config.h: src/stamp-h1
+	@test -f $@ || rm -f src/stamp-h1
+	@test -f $@ || $(MAKE) $(AM_MAKEFLAGS) src/stamp-h1
+
+src/stamp-h1: $(top_srcdir)/src/config.h.in $(top_builddir)/config.status
+	@rm -f src/stamp-h1
+	cd $(top_builddir) && $(SHELL) ./config.status src/config.h
+$(top_srcdir)/src/config.h.in:  $(am__configure_deps) 
+	($(am__cd) $(top_srcdir) && $(AUTOHEADER))
+	rm -f src/stamp-h1
+	touch $@
+
+distclean-hdr:
+	-rm -f src/config.h src/stamp-h1
 src/etc/rc.d/poudriered: $(top_builddir)/config.status $(top_srcdir)/src/etc/rc.d/poudriered.in
 	cd $(top_builddir) && $(SHELL) ./config.status $@
 
@@ -694,19 +716,6 @@ src/libexec/poudriere/dirwatch/dirwatch.$(OBJEXT):  \
 dirwatch$(EXEEXT): $(dirwatch_OBJECTS) $(dirwatch_DEPENDENCIES) $(EXTRA_dirwatch_DEPENDENCIES) 
 	@rm -f dirwatch$(EXEEXT)
 	$(AM_V_CCLD)$(LINK) $(dirwatch_OBJECTS) $(dirwatch_LDADD) $(LIBS)
-src/libexec/poudriere/make_index/$(am__dirstamp):
-	@$(MKDIR_P) src/libexec/poudriere/make_index
-	@: > src/libexec/poudriere/make_index/$(am__dirstamp)
-src/libexec/poudriere/make_index/$(DEPDIR)/$(am__dirstamp):
-	@$(MKDIR_P) src/libexec/poudriere/make_index/$(DEPDIR)
-	@: > src/libexec/poudriere/make_index/$(DEPDIR)/$(am__dirstamp)
-src/libexec/poudriere/make_index/make_index.$(OBJEXT):  \
-	src/libexec/poudriere/make_index/$(am__dirstamp) \
-	src/libexec/poudriere/make_index/$(DEPDIR)/$(am__dirstamp)
-
-make_index$(EXEEXT): $(make_index_OBJECTS) $(make_index_DEPENDENCIES) $(EXTRA_make_index_DEPENDENCIES) 
-	@rm -f make_index$(EXEEXT)
-	$(AM_V_CCLD)$(LINK) $(make_index_OBJECTS) $(make_index_LDADD) $(LIBS)
 src/libexec/poudriere/nc/$(am__dirstamp):
 	@$(MKDIR_P) src/libexec/poudriere/nc
 	@: > src/libexec/poudriere/nc/$(am__dirstamp)
@@ -770,6 +779,19 @@ src/libexec/poudriere/rename/rename.$(OBJEXT):  \
 rename$(EXEEXT): $(rename_OBJECTS) $(rename_DEPENDENCIES) $(EXTRA_rename_DEPENDENCIES) 
 	@rm -f rename$(EXEEXT)
 	$(AM_V_CCLD)$(LINK) $(rename_OBJECTS) $(rename_LDADD) $(LIBS)
+src/libexec/poudriere/tsort/$(am__dirstamp):
+	@$(MKDIR_P) src/libexec/poudriere/tsort
+	@: > src/libexec/poudriere/tsort/$(am__dirstamp)
+src/libexec/poudriere/tsort/$(DEPDIR)/$(am__dirstamp):
+	@$(MKDIR_P) src/libexec/poudriere/tsort/$(DEPDIR)
+	@: > src/libexec/poudriere/tsort/$(DEPDIR)/$(am__dirstamp)
+src/libexec/poudriere/tsort/tsort.$(OBJEXT):  \
+	src/libexec/poudriere/tsort/$(am__dirstamp) \
+	src/libexec/poudriere/tsort/$(DEPDIR)/$(am__dirstamp)
+
+tsort$(EXEEXT): $(tsort_OBJECTS) $(tsort_DEPENDENCIES) $(EXTRA_tsort_DEPENDENCIES) 
+	@rm -f tsort$(EXEEXT)
+	$(AM_V_CCLD)$(LINK) $(tsort_OBJECTS) $(tsort_LDADD) $(LIBS)
 install-dist_binSCRIPTS: $(dist_bin_SCRIPTS)
 	@$(NORMAL_INSTALL)
 	@list='$(dist_bin_SCRIPTS)'; test -n "$(bindir)" || list=; \
@@ -847,9 +869,9 @@ mostlyclean-compile:
 	-rm -f src/libexec/poudriere/cpdup/*.$(OBJEXT)
 	-rm -f src/libexec/poudriere/dirempty/*.$(OBJEXT)
 	-rm -f src/libexec/poudriere/dirwatch/*.$(OBJEXT)
-	-rm -f src/libexec/poudriere/make_index/*.$(OBJEXT)
 	-rm -f src/libexec/poudriere/nc/*.$(OBJEXT)
 	-rm -f src/libexec/poudriere/rename/*.$(OBJEXT)
+	-rm -f src/libexec/poudriere/tsort/*.$(OBJEXT)
 	-rm -f src/pdctl/*.$(OBJEXT)
 	-rm -f src/poudriered/*.$(OBJEXT)
 
@@ -869,9 +891,9 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@src/libexec/poudriere/cpdup/$(DEPDIR)/cpdup-misc.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@src/libexec/poudriere/dirempty/$(DEPDIR)/dirempty.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@src/libexec/poudriere/dirwatch/$(DEPDIR)/dirwatch.Po@am__quote@
-@AMDEP_TRUE@@am__include@ @am__quote@src/libexec/poudriere/make_index/$(DEPDIR)/make_index.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@src/libexec/poudriere/nc/$(DEPDIR)/nc.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@src/libexec/poudriere/rename/$(DEPDIR)/rename.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@src/libexec/poudriere/tsort/$(DEPDIR)/tsort.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@src/pdctl/$(DEPDIR)/pdctl-pdctl.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@src/poudriered/$(DEPDIR)/poudriered-jail.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@src/poudriered/$(DEPDIR)/poudriered-ports.Po@am__quote@
@@ -1385,6 +1407,27 @@ uninstall-dist_pkgdataDATA:
 	@list='$(dist_pkgdata_DATA)'; test -n "$(pkgdatadir)" || list=; \
 	files=`for p in $$list; do echo $$p; done | sed -e 's|^.*/||'`; \
 	dir='$(DESTDIR)$(pkgdatadir)'; $(am__uninstall_files_from_dir)
+install-hookDATA: $(hook_DATA)
+	@$(NORMAL_INSTALL)
+	@list='$(hook_DATA)'; test -n "$(hookdir)" || list=; \
+	if test -n "$$list"; then \
+	  echo " $(MKDIR_P) '$(DESTDIR)$(hookdir)'"; \
+	  $(MKDIR_P) "$(DESTDIR)$(hookdir)" || exit 1; \
+	fi; \
+	for p in $$list; do \
+	  if test -f "$$p"; then d=; else d="$(srcdir)/"; fi; \
+	  echo "$$d$$p"; \
+	done | $(am__base_list) | \
+	while read files; do \
+	  echo " $(INSTALL_DATA) $$files '$(DESTDIR)$(hookdir)'"; \
+	  $(INSTALL_DATA) $$files "$(DESTDIR)$(hookdir)" || exit $$?; \
+	done
+
+uninstall-hookDATA:
+	@$(NORMAL_UNINSTALL)
+	@list='$(hook_DATA)'; test -n "$(hookdir)" || list=; \
+	files=`for p in $$list; do echo $$p; done | sed -e 's|^.*/||'`; \
+	dir='$(DESTDIR)$(hookdir)'; $(am__uninstall_files_from_dir)
 install-sysconfDATA: $(sysconf_DATA)
 	@$(NORMAL_INSTALL)
 	@list='$(sysconf_DATA)'; test -n "$(sysconfdir)" || list=; \
@@ -1631,7 +1674,7 @@ check-am: all-am
 check: check-am
 all-am: Makefile $(LIBRARIES) $(PROGRAMS) $(SCRIPTS) $(MANS) $(DATA)
 installdirs:
-	for dir in "$(DESTDIR)$(pkglibexecdir)" "$(DESTDIR)$(sbindir)" "$(DESTDIR)$(bindir)" "$(DESTDIR)$(rcdir)" "$(DESTDIR)$(man8dir)" "$(DESTDIR)$(assetsdir)" "$(DESTDIR)$(awkdir)" "$(DESTDIR)$(btcssdir)" "$(DESTDIR)$(btimgdir)" "$(DESTDIR)$(btjsdir)" "$(DESTDIR)$(dtcssdir)" "$(DESTDIR)$(dtimagesdir)" "$(DESTDIR)$(dtjsdir)" "$(DESTDIR)$(htmldir)" "$(DESTDIR)$(pkgdatadir)" "$(DESTDIR)$(sysconfdir)"; do \
+	for dir in "$(DESTDIR)$(pkglibexecdir)" "$(DESTDIR)$(sbindir)" "$(DESTDIR)$(bindir)" "$(DESTDIR)$(rcdir)" "$(DESTDIR)$(man8dir)" "$(DESTDIR)$(assetsdir)" "$(DESTDIR)$(awkdir)" "$(DESTDIR)$(btcssdir)" "$(DESTDIR)$(btimgdir)" "$(DESTDIR)$(btjsdir)" "$(DESTDIR)$(dtcssdir)" "$(DESTDIR)$(dtimagesdir)" "$(DESTDIR)$(dtjsdir)" "$(DESTDIR)$(htmldir)" "$(DESTDIR)$(pkgdatadir)" "$(DESTDIR)$(hookdir)" "$(DESTDIR)$(sysconfdir)"; do \
 	  test -z "$$dir" || $(MKDIR_P) "$$dir"; \
 	done
 install: install-am
@@ -1669,12 +1712,12 @@ distclean-generic:
 	-rm -f src/libexec/poudriere/dirempty/$(am__dirstamp)
 	-rm -f src/libexec/poudriere/dirwatch/$(DEPDIR)/$(am__dirstamp)
 	-rm -f src/libexec/poudriere/dirwatch/$(am__dirstamp)
-	-rm -f src/libexec/poudriere/make_index/$(DEPDIR)/$(am__dirstamp)
-	-rm -f src/libexec/poudriere/make_index/$(am__dirstamp)
 	-rm -f src/libexec/poudriere/nc/$(DEPDIR)/$(am__dirstamp)
 	-rm -f src/libexec/poudriere/nc/$(am__dirstamp)
 	-rm -f src/libexec/poudriere/rename/$(DEPDIR)/$(am__dirstamp)
 	-rm -f src/libexec/poudriere/rename/$(am__dirstamp)
+	-rm -f src/libexec/poudriere/tsort/$(DEPDIR)/$(am__dirstamp)
+	-rm -f src/libexec/poudriere/tsort/$(am__dirstamp)
 	-rm -f src/pdctl/$(DEPDIR)/$(am__dirstamp)
 	-rm -f src/pdctl/$(am__dirstamp)
 	-rm -f src/poudriered/$(DEPDIR)/$(am__dirstamp)
@@ -1690,10 +1733,10 @@ clean-am: clean-generic clean-noinstLIBRARIES clean-pkglibexecPROGRAMS \
 
 distclean: distclean-am
 	-rm -f $(am__CONFIG_DISTCLEAN_FILES)
-	-rm -rf external/libucl/src/$(DEPDIR) src/libexec/poudriere/cpdup/$(DEPDIR) src/libexec/poudriere/dirempty/$(DEPDIR) src/libexec/poudriere/dirwatch/$(DEPDIR) src/libexec/poudriere/make_index/$(DEPDIR) src/libexec/poudriere/nc/$(DEPDIR) src/libexec/poudriere/rename/$(DEPDIR) src/pdctl/$(DEPDIR) src/poudriered/$(DEPDIR)
+	-rm -rf external/libucl/src/$(DEPDIR) src/libexec/poudriere/cpdup/$(DEPDIR) src/libexec/poudriere/dirempty/$(DEPDIR) src/libexec/poudriere/dirwatch/$(DEPDIR) src/libexec/poudriere/nc/$(DEPDIR) src/libexec/poudriere/rename/$(DEPDIR) src/libexec/poudriere/tsort/$(DEPDIR) src/pdctl/$(DEPDIR) src/poudriered/$(DEPDIR)
 	-rm -f Makefile
 distclean-am: clean-am distclean-compile distclean-generic \
-	distclean-tags
+	distclean-hdr distclean-tags
 
 dvi: dvi-am
 
@@ -1712,7 +1755,7 @@ install-data-am: install-dist_assetsDATA install-dist_awkDATA \
 	install-dist_btjsDATA install-dist_dtcssDATA \
 	install-dist_dtimagesDATA install-dist_dtjsDATA \
 	install-dist_htmlDATA install-dist_pkgdataDATA \
-	install-dist_rcSCRIPTS install-man
+	install-dist_rcSCRIPTS install-hookDATA install-man
 
 install-dvi: install-dvi-am
 
@@ -1744,7 +1787,7 @@ installcheck-am:
 maintainer-clean: maintainer-clean-am
 	-rm -f $(am__CONFIG_DISTCLEAN_FILES)
 	-rm -rf $(top_srcdir)/autom4te.cache
-	-rm -rf external/libucl/src/$(DEPDIR) src/libexec/poudriere/cpdup/$(DEPDIR) src/libexec/poudriere/dirempty/$(DEPDIR) src/libexec/poudriere/dirwatch/$(DEPDIR) src/libexec/poudriere/make_index/$(DEPDIR) src/libexec/poudriere/nc/$(DEPDIR) src/libexec/poudriere/rename/$(DEPDIR) src/pdctl/$(DEPDIR) src/poudriered/$(DEPDIR)
+	-rm -rf external/libucl/src/$(DEPDIR) src/libexec/poudriere/cpdup/$(DEPDIR) src/libexec/poudriere/dirempty/$(DEPDIR) src/libexec/poudriere/dirwatch/$(DEPDIR) src/libexec/poudriere/nc/$(DEPDIR) src/libexec/poudriere/rename/$(DEPDIR) src/libexec/poudriere/tsort/$(DEPDIR) src/pdctl/$(DEPDIR) src/poudriered/$(DEPDIR)
 	-rm -f Makefile
 maintainer-clean-am: distclean-am maintainer-clean-generic
 
@@ -1766,7 +1809,7 @@ uninstall-am: uninstall-dist_assetsDATA uninstall-dist_awkDATA \
 	uninstall-dist_dtcssDATA uninstall-dist_dtimagesDATA \
 	uninstall-dist_dtjsDATA uninstall-dist_htmlDATA \
 	uninstall-dist_pkgdataDATA uninstall-dist_rcSCRIPTS \
-	uninstall-man uninstall-pkglibexecPROGRAMS \
+	uninstall-hookDATA uninstall-man uninstall-pkglibexecPROGRAMS \
 	uninstall-sbinPROGRAMS uninstall-sysconfDATA
 
 uninstall-man: uninstall-man8
@@ -1779,29 +1822,30 @@ uninstall-man: uninstall-man8
 	cscopelist-am ctags ctags-am dist dist-all dist-bzip2 \
 	dist-gzip dist-lzip dist-shar dist-tarZ dist-xz dist-zip \
 	distcheck distclean distclean-compile distclean-generic \
-	distclean-tags distcleancheck distdir distuninstallcheck dvi \
-	dvi-am html html-am info info-am install install-am \
-	install-data install-data-am install-dist_assetsDATA \
-	install-dist_awkDATA install-dist_binSCRIPTS \
-	install-dist_btcssDATA install-dist_btimgDATA \
-	install-dist_btjsDATA install-dist_dtcssDATA \
-	install-dist_dtimagesDATA install-dist_dtjsDATA \
-	install-dist_htmlDATA install-dist_pkgdataDATA \
-	install-dist_rcSCRIPTS install-dvi install-dvi-am install-exec \
-	install-exec-am install-html install-html-am install-info \
-	install-info-am install-man install-man8 install-pdf \
-	install-pdf-am install-pkglibexecPROGRAMS install-ps \
-	install-ps-am install-sbinPROGRAMS install-strip \
-	install-sysconfDATA installcheck installcheck-am installdirs \
-	maintainer-clean maintainer-clean-generic mostlyclean \
-	mostlyclean-compile mostlyclean-generic pdf pdf-am ps ps-am \
-	tags tags-am uninstall uninstall-am uninstall-dist_assetsDATA \
-	uninstall-dist_awkDATA uninstall-dist_binSCRIPTS \
-	uninstall-dist_btcssDATA uninstall-dist_btimgDATA \
-	uninstall-dist_btjsDATA uninstall-dist_dtcssDATA \
-	uninstall-dist_dtimagesDATA uninstall-dist_dtjsDATA \
-	uninstall-dist_htmlDATA uninstall-dist_pkgdataDATA \
-	uninstall-dist_rcSCRIPTS uninstall-man uninstall-man8 \
+	distclean-hdr distclean-tags distcleancheck distdir \
+	distuninstallcheck dvi dvi-am html html-am info info-am \
+	install install-am install-data install-data-am \
+	install-dist_assetsDATA install-dist_awkDATA \
+	install-dist_binSCRIPTS install-dist_btcssDATA \
+	install-dist_btimgDATA install-dist_btjsDATA \
+	install-dist_dtcssDATA install-dist_dtimagesDATA \
+	install-dist_dtjsDATA install-dist_htmlDATA \
+	install-dist_pkgdataDATA install-dist_rcSCRIPTS install-dvi \
+	install-dvi-am install-exec install-exec-am install-hookDATA \
+	install-html install-html-am install-info install-info-am \
+	install-man install-man8 install-pdf install-pdf-am \
+	install-pkglibexecPROGRAMS install-ps install-ps-am \
+	install-sbinPROGRAMS install-strip install-sysconfDATA \
+	installcheck installcheck-am installdirs maintainer-clean \
+	maintainer-clean-generic mostlyclean mostlyclean-compile \
+	mostlyclean-generic pdf pdf-am ps ps-am tags tags-am uninstall \
+	uninstall-am uninstall-dist_assetsDATA uninstall-dist_awkDATA \
+	uninstall-dist_binSCRIPTS uninstall-dist_btcssDATA \
+	uninstall-dist_btimgDATA uninstall-dist_btjsDATA \
+	uninstall-dist_dtcssDATA uninstall-dist_dtimagesDATA \
+	uninstall-dist_dtjsDATA uninstall-dist_htmlDATA \
+	uninstall-dist_pkgdataDATA uninstall-dist_rcSCRIPTS \
+	uninstall-hookDATA uninstall-man uninstall-man8 \
 	uninstall-pkglibexecPROGRAMS uninstall-sbinPROGRAMS \
 	uninstall-sysconfDATA
 

@@ -12,6 +12,7 @@ dtcssdir= $(datatablesdir)/css
 dtimagesdir= $(datatablesdir)/images
 dtjsdir= $(datatablesdir)/js
 rcdir= $(sysconfdir)/rc.d
+hookdir= $(sysconfdir)/poudriere.d/hooks
 
 dist_bin_SCRIPTS=	src/bin/poudriere
 
@@ -19,6 +20,9 @@ dist_man_MANS=	src/bin/poudriere.8
 
 sysconf_DATA=	src/etc/poudriere.conf.sample \
 		src/etc/poudriered.conf.sample
+
+hook_DATA=	src/etc/poudriere.d/hooks/bulk.sh.sample \
+		src/etc/poudriere.d/hooks/pkgbuild.sh.sample
 
 dist_pkgdata_DATA=	src/share/poudriere/bulk.sh \
 			src/share/poudriere/clean.sh \
@@ -72,9 +76,9 @@ pkglibexec_PROGRAMS= \
 		     cpdup \
 		     dirempty \
 		     dirwatch \
-		     make_index \
 		     nc \
-		     rename
+		     rename \
+		     tsort
 
 sbin_PROGRAMS=	poudriered pdctl
 noinst_LIBRARIES=	libucl.a
@@ -93,8 +97,7 @@ cpdup_CFLAGS=	-D_ST_FLAGS_PRESENT_=1
 dirempty_SOURCES=	src/libexec/poudriere/dirempty/dirempty.c
 dirwatch_SOURCES=	src/libexec/poudriere/dirwatch/dirwatch.c
 nc_SOURCES=		src/libexec/poudriere/nc/nc.c
-make_index_SOURCES=	src/libexec/poudriere/make_index/make_index.c
-make_index_LDADD=	-ljail -lsbuf
+tsort_SOURCES=		src/libexec/poudriere/tsort/tsort.c
 libucl_a_SOURCES=	external/libucl/src/ucl_emitter.c \
 			external/libucl/src/ucl_hash.c \
 			external/libucl/src/ucl_parser.c \
